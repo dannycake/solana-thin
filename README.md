@@ -240,3 +240,19 @@ docs/DESIGN.md           formats, threat model, open problems
 ## License
 
 MIT or Apache-2.0, at your option.
+
+## Next step: test against a running validator
+
+Not done yet. The certificate path has been checked against Agave's libraries,
+not against a validator that is actually running.
+
+1. Install Agave v4.4.x and run `solana-test-validator` for a minute, sending a
+   few Memo transactions.
+2. Read each slot's data shreds from its ledger (Agave's `Blockstore`, as
+   `tools/agave-fixtures` already does, or a Geyser plugin).
+3. Build the validator set from the test validator's vote account, take a
+   finality certificate from a later block's footer, and run
+   `prover::prove` then `ThinClient::verify_signature`.
+
+A test validator has one signer, so this checks formats and the pipeline end
+to end. Checking mainnet needs shreds from an RPC node or a shred stream.
