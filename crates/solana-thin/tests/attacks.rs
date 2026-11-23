@@ -31,13 +31,18 @@ fn a_notarization_is_not_finality() {
         let cert = w.validators.fast_cert(block, &ranks, SHRED_VERSION);
         // Drop one signer if the helper overshot 80%.
         let cert = match w.client.verify_finality(&cert) {
-            Ok(_) => w.validators.fast_cert(block, &ranks[..ranks.len() - 1], SHRED_VERSION),
+            Ok(_) => w
+                .validators
+                .fast_cert(block, &ranks[..ranks.len() - 1], SHRED_VERSION),
             Err(_) => cert,
         };
         assert!(
             matches!(
                 w.client.verify_finality(&cert),
-                Err(Error::InsufficientStake { required_bps: 8_000, .. })
+                Err(Error::InsufficientStake {
+                    required_bps: 8_000,
+                    ..
+                })
             ),
             "{bps} bps of notarize votes must not finalize"
         );
@@ -65,7 +70,10 @@ fn finalize_votes_do_not_choose_a_block() {
     // The honest network: everyone notarized and finalized `real`.
     let honest = w.validators.slow_cert(real, &all, &all, SHRED_VERSION);
     assert!(w.client.verify_finality(&honest).is_ok());
-    let FinalityCert::Slow { finalize, notar, .. } = honest else {
+    let FinalityCert::Slow {
+        finalize, notar, ..
+    } = honest
+    else {
         unreachable!()
     };
 
@@ -76,18 +84,26 @@ fn finalize_votes_do_not_choose_a_block() {
         finalize: finalize.clone(),
         notar,
     };
-    assert_eq!(w.client.verify_finality(&relabeled), Err(Error::SignatureMismatch));
+    assert_eq!(
+        w.client.verify_finality(&relabeled),
+        Err(Error::SignatureMismatch)
+    );
 
     // 2. The attacker controls a minority that really did notarize the twin.
     let minority = &all[..5];
     let weak = FinalityCert::Slow {
         block: twin,
         finalize,
-        notar: w.validators.aggregate(minority, &notarize_payload(&twin, SHRED_VERSION)),
+        notar: w
+            .validators
+            .aggregate(minority, &notarize_payload(&twin, SHRED_VERSION)),
     };
     assert!(matches!(
         w.client.verify_finality(&weak),
-        Err(Error::InsufficientStake { required_bps: 6_000, .. })
+        Err(Error::InsufficientStake {
+            required_bps: 6_000,
+            ..
+        })
     ));
 }
 
@@ -99,9 +115,14 @@ fn a_finalize_aggregate_is_not_a_fast_certificate() {
     let all: Vec<usize> = (0..w.validators.len()).collect();
     let cert = FinalityCert::Fast {
         block,
-        notar: w.validators.aggregate(&all, &finalize_payload(block.slot, SHRED_VERSION)),
+        notar: w
+            .validators
+            .aggregate(&all, &finalize_payload(block.slot, SHRED_VERSION)),
     };
-    assert_eq!(w.client.verify_finality(&cert), Err(Error::SignatureMismatch));
+    assert_eq!(
+        w.client.verify_finality(&cert),
+        Err(Error::SignatureMismatch)
+    );
 }
 
 /// The same validators run testnets and survive cluster restarts with the same
@@ -112,7 +133,10 @@ fn votes_from_another_cluster_do_not_count() {
     let block = w.blocks[0].block();
     let all: Vec<usize> = (0..w.validators.len()).collect();
     let foreign = w.validators.fast_cert(block, &all, SHRED_VERSION + 1);
-    assert_eq!(w.client.verify_finality(&foreign), Err(Error::SignatureMismatch));
+    assert_eq!(
+        w.client.verify_finality(&foreign),
+        Err(Error::SignatureMismatch)
+    );
 }
 
 /// A certificate is only as good as the validator set it is checked against.
@@ -132,16 +156,23 @@ fn certificates_are_bound_to_their_epochs_validators() {
     // An attacker's own validators, all signing happily.
     let attackers = TestValidators::with_seed(99, 20, |_| 1_000_000);
     let forged = attackers.fast_cert(w.blocks[0].block(), &all, SHRED_VERSION);
-    assert_eq!(w.client.verify_finality(&forged), Err(Error::SignatureMismatch));
+    assert_eq!(
+        w.client.verify_finality(&forged),
+        Err(Error::SignatureMismatch)
+    );
 
     // They cannot get their set pinned under the honest set's hash...
     let honest_hash = w.validators.set().hash();
     assert_eq!(
-        w.client.trust_validator_set(0, attackers.set(), &honest_hash),
+        w.client
+            .trust_validator_set(0, attackers.set(), &honest_hash),
         Err(Error::ValidatorSetHashMismatch)
     );
     // ...and the honest set stays in force.
-    assert_eq!(w.client.verify_finality(&forged), Err(Error::SignatureMismatch));
+    assert_eq!(
+        w.client.verify_finality(&forged),
+        Err(Error::SignatureMismatch)
+    );
 }
 
 /// Stake is counted from the bitmap, so the bitmap must name exactly the keys
@@ -160,17 +191,29 @@ fn the_bitmap_cannot_claim_more_than_signed() {
     let all: Vec<usize> = (0..w.validators.len()).collect();
     let mut inflated = notar.clone();
     inflated.bitmap = encode_bitmap(&all);
-    let cert = FinalityCert::Fast { block, notar: inflated };
-    assert_eq!(w.client.verify_finality(&cert), Err(Error::SignatureMismatch));
+    let cert = FinalityCert::Fast {
+        block,
+        notar: inflated,
+    };
+    assert_eq!(
+        w.client.verify_finality(&cert),
+        Err(Error::SignatureMismatch)
+    );
 
     let mut base3 = notar.clone();
     base3.bitmap[0] = 1;
-    let cert = FinalityCert::Fast { block, notar: base3 };
+    let cert = FinalityCert::Fast {
+        block,
+        notar: base3,
+    };
     assert_eq!(w.client.verify_finality(&cert), Err(Error::InvalidBitmap));
 
     let mut out_of_range = notar;
     out_of_range.bitmap = encode_bitmap(&[w.validators.len()]);
-    let cert = FinalityCert::Fast { block, notar: out_of_range };
+    let cert = FinalityCert::Fast {
+        block,
+        notar: out_of_range,
+    };
     assert_eq!(w.client.verify_finality(&cert), Err(Error::RankOutOfRange));
 }
 
@@ -236,14 +279,17 @@ fn a_rogue_key_forges_everything_if_an_unpinned_set_is_trusted() {
     // The attacker cannot pin the poisoned set: its hash is not the honest one.
     let honest_hash = honest.hash();
     assert_eq!(
-        w.client.trust_validator_set(0, poisoned.clone(), &honest_hash),
+        w.client
+            .trust_validator_set(0, poisoned.clone(), &honest_hash),
         Err(Error::ValidatorSetHashMismatch)
     );
 
     // But a caller who pins whatever a server hands them has lost everything:
     // a certificate "signed" by 100% of stake for a block that does not exist.
     let poisoned_hash = poisoned.hash();
-    w.client.trust_validator_set(0, poisoned, &poisoned_hash).unwrap();
+    w.client
+        .trust_validator_set(0, poisoned, &poisoned_hash)
+        .unwrap();
     assert_eq!(w.client.verify_finality(&forged).unwrap().block, block);
 }
 
@@ -324,7 +370,8 @@ fn stale_mode_refuses_unknown_keys_without_proof_of_possession() {
     // secret. Its own key's proof, or one for another account, does not fit.
     let last = candidates.len() - 1;
     candidates[last].proof_of_possession = Some(attacker.proof_of_possession(0, [1; 32]));
-    w.client.add_candidate_set(1, CandidateSet::new(candidates).unwrap());
+    w.client
+        .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
     assert_eq!(
         w.client.verify_finality(&forged),
         Err(Error::MissingProofOfPossession)
@@ -344,7 +391,8 @@ fn stale_mode_gives_new_keys_no_weight() {
         })
         .collect();
     candidates.extend(known(&w));
-    w.client.add_candidate_set(1, CandidateSet::new(candidates).unwrap());
+    w.client
+        .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
 
     // All thirty newcomers sign. Valid signature, valid proofs, zero stake.
     let ranks: Vec<usize> = (0..newcomers.len()).collect();
@@ -388,13 +436,19 @@ fn stale_mode_raises_the_bar_with_distance() {
     // One epoch out: 80% is not enough, 89% is.
     assert!(matches!(
         w.client.verify_finality(&cert_at(&w, 1, 8_000)),
-        Err(Error::InsufficientStake { required_bps: 8_900, .. })
+        Err(Error::InsufficientStake {
+            required_bps: 8_900,
+            ..
+        })
     ));
     assert!(w.client.verify_finality(&cert_at(&w, 1, 8_900)).is_ok());
     // Two epochs out: 98%.
     assert!(matches!(
         w.client.verify_finality(&cert_at(&w, 2, 9_000)),
-        Err(Error::InsufficientStake { required_bps: 9_800, .. })
+        Err(Error::InsufficientStake {
+            required_bps: 9_800,
+            ..
+        })
     ));
     assert!(w.client.verify_finality(&cert_at(&w, 2, 10_000)).is_ok());
     // Three epochs out: past max_epochs.
@@ -459,15 +513,22 @@ fn a_transaction_embedded_in_another_transactions_data_is_not_included() {
         .component(&entry_batch(&[vec![]]))
         .build();
     let data = BlockData::from_shreds(&payloads).unwrap();
-    let cert = w
-        .validators
-        .fast_cert(data.block(), &w.validators.ranks_reaching(8_000), SHRED_VERSION);
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
 
     // The victim's bytes really are in the finalized block...
-    assert!(component.windows(victim.len()).any(|window| window == victim));
+    assert!(component
+        .windows(victim.len())
+        .any(|window| window == victim));
     // ...and a verifier that starts parsing where it is told to finds a
     // perfectly good transaction there.
-    let first = TxPosition { entry: 0, transaction: 0 };
+    let first = TxPosition {
+        entry: 0,
+        transaction: 0,
+    };
     let naive = block::transaction_at(&component[offset..], first).unwrap();
     assert_eq!(naive.signature(), &victim_signature);
 
@@ -490,7 +551,10 @@ fn a_transaction_embedded_in_another_transactions_data_is_not_included() {
         position: first,
         footer_start: None,
     };
-    assert_eq!(w.client.verify_transaction(&proof), Err(Error::NotComponentStart));
+    assert_eq!(
+        w.client.verify_transaction(&proof),
+        Err(Error::NotComponentStart)
+    );
 
     // Hiding the previous shred does not help: then the start cannot be shown.
     let needed: BTreeSet<u32> = [0, fake_start, fake_start + 1].into();
@@ -537,7 +601,10 @@ fn the_component_boundary_flag_cannot_be_forged() {
         ancestry: vec![],
         block,
         component_start: 40,
-        position: TxPosition { entry: 0, transaction: 0 },
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
         footer_start: None,
     };
     assert_eq!(
@@ -545,7 +612,7 @@ fn the_component_boundary_flag_cannot_be_forged() {
         Err(Error::NotComponentStart)
     );
     let run = block.sets.iter_mut().find(|s| s.set == 1).unwrap();
-    let shred_39 = &mut run.shreds[(39 - 32 - usize::from(run.first)) as usize];
+    let shred_39 = &mut run.shreds[39 - 32 - usize::from(run.first)];
     shred_39.flags |= FLAG_DATA_COMPLETE;
     assert_eq!(
         w.client.verify_transaction(&proof(block)),
@@ -584,9 +651,11 @@ fn a_transaction_in_an_abandoned_block_prefix_is_not_included() {
     // A dishonest one indexes it with the parent the block ended on, which is
     // the parent its id commits to, and so the id validators certified.
     let data = BlockData::from_shreds_with_final_parent(&payloads, final_parent).unwrap();
-    let cert = w
-        .validators
-        .fast_cert(data.block(), &w.validators.ranks_reaching(8_000), SHRED_VERSION);
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
     assert!(w.client.verify_finality(&cert).is_ok());
 
     for seed in [31337, 31338] {
@@ -608,13 +677,18 @@ fn shreds_of_one_block_do_not_open_another() {
     let mut proof = w.proof(0, &signature);
     proof.finality = w.fast_cert(1);
     // The parent link is checked first and already fails to reach the id.
-    assert_eq!(w.client.verify_transaction(&proof), Err(Error::BlockIdMismatch));
+    assert_eq!(
+        w.client.verify_transaction(&proof),
+        Err(Error::BlockIdMismatch)
+    );
 
     // Same slot, same shreds, different shred version: the leaves differ.
     let mut other_cluster = ThinClient::new(ClusterParams::mainnet(SHRED_VERSION + 1));
     let foreign = TestValidators::new(20, |i| 1_000_000 + 37_000 * (i as u64 % 7));
     let hash = foreign.set().hash();
-    other_cluster.trust_validator_set(0, foreign.set(), &hash).unwrap();
+    other_cluster
+        .trust_validator_set(0, foreign.set(), &hash)
+        .unwrap();
     let block = w.blocks[0].block();
     let all: Vec<usize> = (0..foreign.len()).collect();
     let mut proof = w.proof(0, &signature);
@@ -771,7 +845,13 @@ fn only_real_ancestors_inherit_finality() {
 
     // A sibling of block 2: same parent, never finalized.
     let fork_tx = legacy_transaction(6000, &[b"on the losing fork"]);
-    let fork = simple_block(1001, b1.block(), SHRED_VERSION, &[vec![vec![fork_tx]]], None);
+    let fork = simple_block(
+        1001,
+        b1.block(),
+        SHRED_VERSION,
+        &[vec![vec![fork_tx]]],
+        None,
+    );
     let cert_b3 = w.fast_cert(2);
 
     // The prover itself refuses a chain that does not connect.
@@ -791,14 +871,20 @@ fn only_real_ancestors_inherit_finality() {
         position,
         footer_start: None,
     };
-    assert_eq!(w.client.verify_transaction(&forged), Err(Error::BlockIdMismatch));
+    assert_eq!(
+        w.client.verify_transaction(&forged),
+        Err(Error::BlockIdMismatch)
+    );
 
     // Hand-built: a link that claims the fork is block 3's parent.
     let mut lying_link = b3.parent_link();
     lying_link.parent = fork.block();
     let mut forged2 = forged.clone();
     forged2.ancestry = vec![lying_link];
-    assert_eq!(w.client.verify_transaction(&forged2), Err(Error::BlockIdMismatch));
+    assert_eq!(
+        w.client.verify_transaction(&forged2),
+        Err(Error::BlockIdMismatch)
+    );
 
     // A certificate for block 1 says nothing about its child.
     let (block, component_start, position, _) =
@@ -813,7 +899,10 @@ fn only_real_ancestors_inherit_finality() {
     };
     // (Caught early: block 2 names block 1 as its parent, and a block cannot
     // be its own parent's slot.)
-    assert_eq!(w.client.verify_transaction(&upward), Err(Error::InvalidParent));
+    assert_eq!(
+        w.client.verify_transaction(&upward),
+        Err(Error::InvalidParent)
+    );
 
     // Nor can a "parent" be in a later slot than its child.
     let mut backwards = b2.parent_link();
@@ -843,22 +932,40 @@ fn hostile_bytes_never_panic_and_never_over_allocate() {
 
     // Every prefix.
     for len in 0..bytes.len() {
-        assert!(TxProof::from_bytes(&bytes[..len], &limits).is_err(), "prefix {len}");
+        assert!(
+            TxProof::from_bytes(&bytes[..len], &limits).is_err(),
+            "prefix {len}"
+        );
     }
     // Trailing garbage.
     let mut long = bytes.clone();
     long.push(0);
-    assert_eq!(TxProof::from_bytes(&long, &limits), Err(Error::TrailingBytes));
+    assert_eq!(
+        TxProof::from_bytes(&long, &limits),
+        Err(Error::TrailingBytes)
+    );
     // Wrong magic and version.
     let mut bad = bytes.clone();
     bad[0] = b'X';
-    assert_eq!(TxProof::from_bytes(&bad, &limits), Err(Error::Malformed("magic")));
+    assert_eq!(
+        TxProof::from_bytes(&bad, &limits),
+        Err(Error::Malformed("magic"))
+    );
     let mut bad = bytes.clone();
     bad[3] = 2;
-    assert_eq!(TxProof::from_bytes(&bad, &limits), Err(Error::UnsupportedVersion(2)));
+    assert_eq!(
+        TxProof::from_bytes(&bad, &limits),
+        Err(Error::UnsupportedVersion(2))
+    );
     // Size limit.
-    let tiny = Limits { max_proof_bytes: 100, ..limits };
-    assert_eq!(TxProof::from_bytes(&bytes, &tiny), Err(Error::LimitExceeded("proof size")));
+    let tiny = Limits {
+        max_proof_bytes: 100,
+        ..limits
+    };
+    assert_eq!(
+        TxProof::from_bytes(&bytes, &tiny),
+        Err(Error::LimitExceeded("proof size"))
+    );
     // Counts that promise more than the input holds.
     let mut pseudo = 0x9e3779b97f4a7c15u64;
     for _ in 0..2_000 {
@@ -913,6 +1020,9 @@ fn no_single_bit_flip_produces_a_false_statement() {
     }
     // Survivors exist (a flipped position can point at another real
     // transaction; unused bitmap bits are ignored) but they are rare.
-    assert!(rejected > survived * 50, "{rejected} rejected, {survived} survived");
+    assert!(
+        rejected > survived * 50,
+        "{rejected} rejected, {survived} survived"
+    );
     println!("bit flips: {rejected} rejected, {survived} still true");
 }

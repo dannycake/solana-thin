@@ -450,7 +450,10 @@ mod tests {
 
         let mut zero = good.clone();
         zero[3].stake = 0;
-        assert_eq!(ValidatorSet::from_ranked(zero).unwrap_err(), Error::ZeroStake);
+        assert_eq!(
+            ValidatorSet::from_ranked(zero).unwrap_err(),
+            Error::ZeroStake
+        );
 
         let mut dup = good.clone();
         dup[1].bls_pubkey = dup[0].bls_pubkey;
@@ -490,7 +493,10 @@ mod tests {
         let set = tv.set();
         let mut changed = set.validators().to_vec();
         changed[4].stake -= 1;
-        assert_ne!(ValidatorSet::from_ranked(changed).unwrap().hash(), set.hash());
+        assert_ne!(
+            ValidatorSet::from_ranked(changed).unwrap().hash(),
+            set.hash()
+        );
         let fewer = set.validators()[..4].to_vec();
         assert_ne!(ValidatorSet::from_ranked(fewer).unwrap().hash(), set.hash());
         let round_trip = ValidatorSet::from_bytes(&set.to_bytes()).unwrap();
@@ -509,10 +515,10 @@ mod tests {
         };
         let mut accounts = vec![
             account(1, Some(key(0)), 5),
-            account(2, None, 100),         // no BLS key
-            account(3, Some(key(1)), 0),   // no stake
+            account(2, None, 100),       // no BLS key
+            account(3, Some(key(1)), 0), // no stake
             account(4, Some(key(2)), 7),
-            account(5, Some(key(2)), 9),   // shares a BLS key with 4: both go
+            account(5, Some(key(2)), 9), // shares a BLS key with 4: both go
             account(6, Some(key(3)), 3),
             account(7, Some(key(4)), 4),
             account(8, Some([0xff; 48]), 50), // not a key at all
@@ -540,7 +546,10 @@ mod tests {
         assert_eq!(set.signed_stake(&fewer, msg), Err(Error::SignatureMismatch));
 
         // Same signers, different message.
-        assert_eq!(set.signed_stake(&agg, b"other"), Err(Error::SignatureMismatch));
+        assert_eq!(
+            set.signed_stake(&agg, b"other"),
+            Err(Error::SignatureMismatch)
+        );
 
         // No signers at all.
         let mut none = agg.clone();

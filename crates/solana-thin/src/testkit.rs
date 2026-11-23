@@ -47,7 +47,11 @@ impl TestValidators {
     pub fn with_seed(seed: u64, n: usize, stake: impl Fn(usize) -> u64) -> Self {
         let mut pairs: Vec<(SecretKey, Validator)> = (0..n)
             .map(|i| {
-                let ikm = merkle::sha256(&[b"testkit-key", &seed.to_le_bytes(), &(i as u64).to_le_bytes()]);
+                let ikm = merkle::sha256(&[
+                    b"testkit-key",
+                    &seed.to_le_bytes(),
+                    &(i as u64).to_le_bytes(),
+                ]);
                 let secret = SecretKey::key_gen(&ikm, &[]).expect("32 bytes of key material");
                 let validator = Validator {
                     bls_pubkey: secret.sk_to_pk().compress(),
@@ -190,7 +194,10 @@ fn legacy_message(seed: u64, memos: &[&[u8]]) -> Vec<u8> {
     write_short_u16(&mut out, 2);
     out.extend_from_slice(&payer(seed));
     out.extend_from_slice(&MEMO_PROGRAM_ID);
-    out.extend_from_slice(&merkle::sha256(&[b"testkit-blockhash", &seed.to_le_bytes()]));
+    out.extend_from_slice(&merkle::sha256(&[
+        b"testkit-blockhash",
+        &seed.to_le_bytes(),
+    ]));
     write_short_u16(&mut out, memos.len() as u16);
     for memo in memos {
         out.push(1);
@@ -230,7 +237,10 @@ pub fn v0_transaction(seed: u64, memos: &[&[u8]]) -> Vec<u8> {
 pub fn v1_transaction(seed: u64, memos: &[&[u8]]) -> Vec<u8> {
     let mut out = vec![0x81, 1, 0, 1];
     out.extend_from_slice(&0b111u32.to_le_bytes());
-    out.extend_from_slice(&merkle::sha256(&[b"testkit-blockhash", &seed.to_le_bytes()]));
+    out.extend_from_slice(&merkle::sha256(&[
+        b"testkit-blockhash",
+        &seed.to_le_bytes(),
+    ]));
     out.push(memos.len() as u8);
     out.push(2);
     out.extend_from_slice(&payer(seed));
@@ -323,7 +333,10 @@ pub fn entry_batch(entries: &[Vec<Vec<u8>>]) -> Vec<u8> {
     let mut out = (entries.len() as u64).to_le_bytes().to_vec();
     for (i, transactions) in entries.iter().enumerate() {
         out.extend_from_slice(&1u64.to_le_bytes());
-        out.extend_from_slice(&merkle::sha256(&[b"testkit-entry", &(i as u64).to_le_bytes()]));
+        out.extend_from_slice(&merkle::sha256(&[
+            b"testkit-entry",
+            &(i as u64).to_le_bytes(),
+        ]));
         out.extend_from_slice(&(transactions.len() as u64).to_le_bytes());
         for tx in transactions {
             out.extend_from_slice(tx);
@@ -502,7 +515,8 @@ pub fn demo_world() -> DemoWorld {
     let block = simple_block(100, genesis, 50093, &[vec![txs]], None);
     let cert = validators.fast_cert(block.block(), &validators.ranks_reaching(8_000), 50093);
     let signature = signature_for(3);
-    let proof = prover::prove(cert, &[&block], &signature, true).expect("transaction is in the block");
+    let proof =
+        prover::prove(cert, &[&block], &signature, true).expect("transaction is in the block");
     DemoWorld {
         set_hash: validators.set().hash(),
         set: validators.set(),

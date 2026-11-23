@@ -53,7 +53,9 @@ fn main() -> Result<()> {
     // ----------------------------------------------------------------------
     // The network includes it, among other traffic, and finalizes.
     // ----------------------------------------------------------------------
-    let traffic: Vec<Vec<u8>> = (100..140).map(|i| legacy_transaction(i, &[b"gm"])).collect();
+    let traffic: Vec<Vec<u8>> = (100..140)
+        .map(|i| legacy_transaction(i, &[b"gm"]))
+        .collect();
     let mut entry = traffic;
     entry.insert(17, anchor_tx);
     let anchor_block = simple_block(5_003, pulse, SHRED_VERSION, &[vec![entry]], None);
@@ -82,7 +84,10 @@ fn main() -> Result<()> {
     client.trust_validator_set(0, validators.set(), &pinned_hash)?;
 
     let verified = client.verify_transaction_bytes(&wire)?;
-    assert!(verified.has_memo(&memo), "the proof is for some other transaction");
+    assert!(
+        verified.has_memo(&memo),
+        "the proof is for some other transaction"
+    );
 
     // B recomputes the fingerprint from the artifact it was sent and the pulse
     // it names, and checks the pulse really is an earlier finalized block: it
@@ -92,8 +97,14 @@ fn main() -> Result<()> {
 
     let seconds = verified.block_time_nanos().unwrap() / 1_000_000_000;
     println!("fingerprint {}", hex(&fingerprint));
-    println!("  made after  slot {} (it commits to that block's id)", verified.parent.slot);
-    println!("  made before slot {} (unix time {seconds})", verified.block.slot);
+    println!(
+        "  made after  slot {} (it commits to that block's id)",
+        verified.parent.slot
+    );
+    println!(
+        "  made before slot {} (unix time {seconds})",
+        verified.block.slot
+    );
     println!(
         "  finalized by a {:?} certificate on slot {}, {} of {} validators signing",
         verified.finalized_by.finality,
@@ -101,7 +112,10 @@ fn main() -> Result<()> {
         signers.len(),
         validators.len()
     );
-    println!("  included, position {:?}; execution status is not part of the claim", verified.position);
+    println!(
+        "  included, position {:?}; execution status is not part of the claim",
+        verified.position
+    );
 
     // ----------------------------------------------------------------------
     // A relay that lies gets nowhere.
@@ -109,7 +123,10 @@ fn main() -> Result<()> {
     let mut tampered = wire.clone();
     let at = tampered.len() / 2;
     tampered[at] ^= 1;
-    println!("tampered proof: {}", client.verify_transaction_bytes(&tampered).unwrap_err());
+    println!(
+        "tampered proof: {}",
+        client.verify_transaction_bytes(&tampered).unwrap_err()
+    );
     Ok(())
 }
 

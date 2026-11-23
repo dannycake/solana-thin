@@ -149,7 +149,10 @@ impl fmt::Display for Error {
             Error::NotComponentStart => write!(f, "claimed component start is not a boundary"),
             Error::InvalidComponent(what) => write!(f, "invalid block component: {what}"),
             Error::UpdateParentBlock => {
-                write!(f, "block switched parent mid-way; inclusion cannot be proven")
+                write!(
+                    f,
+                    "block switched parent mid-way; inclusion cannot be proven"
+                )
             }
             Error::UnsupportedTransaction => write!(f, "unsupported transaction encoding"),
             Error::TransactionNotFound => write!(f, "no transaction at the claimed position"),

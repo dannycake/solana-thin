@@ -15,7 +15,12 @@ use solana_thin::*;
 fn accounts() -> (u64, Vec<VoteAccount>) {
     let doc: Value =
         serde_json::from_str(include_str!("vectors/mainnet-vote-accounts.json")).unwrap();
-    let hex32 = |v: &Value| -> [u8; 32] { hex::decode(v.as_str().unwrap()).unwrap().try_into().unwrap() };
+    let hex32 = |v: &Value| -> [u8; 32] {
+        hex::decode(v.as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap()
+    };
     let accounts = doc["accounts"]
         .as_array()
         .unwrap()

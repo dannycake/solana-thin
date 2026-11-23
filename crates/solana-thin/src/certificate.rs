@@ -187,26 +187,44 @@ mod tests {
             let encoded = encode_bitmap(&ranks);
             assert_eq!(decode_bitmap(&encoded, 672).unwrap(), ranks);
         }
-        assert_eq!(decode_bitmap(&encode_bitmap(&[]), 10).unwrap(), Vec::<usize>::new());
+        assert_eq!(
+            decode_bitmap(&encode_bitmap(&[]), 10).unwrap(),
+            Vec::<usize>::new()
+        );
     }
 
     #[test]
     fn bitmap_rejects_what_validators_reject() {
         // Too short, unknown version, two-vector form.
         assert_eq!(decode_bitmap(&[0, 1], 8), Err(Error::InvalidBitmap));
-        assert_eq!(decode_bitmap(&[2, 8, 0, 0xff], 8), Err(Error::InvalidBitmap));
-        assert_eq!(decode_bitmap(&[1, 5, 0, 0x01], 8), Err(Error::InvalidBitmap));
+        assert_eq!(
+            decode_bitmap(&[2, 8, 0, 0xff], 8),
+            Err(Error::InvalidBitmap)
+        );
+        assert_eq!(
+            decode_bitmap(&[1, 5, 0, 0x01], 8),
+            Err(Error::InvalidBitmap)
+        );
         // More bits than validators.
-        assert_eq!(decode_bitmap(&[0, 9, 0, 0xff, 0x01], 8), Err(Error::RankOutOfRange));
+        assert_eq!(
+            decode_bitmap(&[0, 9, 0, 0xff, 0x01], 8),
+            Err(Error::RankOutOfRange)
+        );
         // Byte length that does not match the bit count.
         assert_eq!(decode_bitmap(&[0, 8, 0], 8), Err(Error::InvalidBitmap));
-        assert_eq!(decode_bitmap(&[0, 8, 0, 0xff, 0x00], 8), Err(Error::InvalidBitmap));
+        assert_eq!(
+            decode_bitmap(&[0, 8, 0, 0xff, 0x00], 8),
+            Err(Error::InvalidBitmap)
+        );
     }
 
     #[test]
     fn bits_past_the_count_are_ignored_like_the_validator_does() {
         // Five bits declared; the three high bits of the byte are noise.
-        assert_eq!(decode_bitmap(&[0, 5, 0, 0b1110_0101], 8).unwrap(), vec![0, 2]);
+        assert_eq!(
+            decode_bitmap(&[0, 5, 0, 0b1110_0101], 8).unwrap(),
+            vec![0, 2]
+        );
     }
 
     #[test]

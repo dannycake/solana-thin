@@ -15,13 +15,13 @@ use crate::wire::Reader;
 
 /// SPL Memo program, `MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`.
 pub const MEMO_PROGRAM_ID: [u8; 32] = [
-    5, 74, 83, 90, 153, 41, 33, 6, 77, 36, 232, 113, 96, 218, 56, 124, 124, 53, 181, 221, 188,
-    146, 187, 129, 228, 31, 168, 64, 65, 5, 68, 141,
+    5, 74, 83, 90, 153, 41, 33, 6, 77, 36, 232, 113, 96, 218, 56, 124, 124, 53, 181, 221, 188, 146,
+    187, 129, 228, 31, 168, 64, 65, 5, 68, 141,
 ];
 /// The first Memo program, `Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo`.
 pub const MEMO_V1_PROGRAM_ID: [u8; 32] = [
-    5, 74, 83, 80, 248, 93, 200, 130, 214, 20, 165, 86, 114, 120, 138, 41, 109, 223, 30, 171,
-    171, 208, 166, 6, 120, 136, 73, 50, 244, 238, 246, 160,
+    5, 74, 83, 80, 248, 93, 200, 130, 214, 20, 165, 86, 114, 120, 138, 41, 109, 223, 30, 171, 171,
+    208, 166, 6, 120, 136, 73, 50, 244, 238, 246, 160,
 ];
 
 /// Which message encoding a transaction uses.
@@ -86,7 +86,8 @@ impl Transaction {
     /// The program an instruction calls, if its key is listed in the message
     /// rather than loaded from a lookup table.
     pub fn program_id(&self, instruction: &Instruction) -> Option<&[u8; 32]> {
-        self.account_keys.get(usize::from(instruction.program_id_index))
+        self.account_keys
+            .get(usize::from(instruction.program_id_index))
     }
 
     /// Data of every instruction addressed to a Memo program, in order.
@@ -151,7 +152,15 @@ impl Transaction {
                 }
             }
             let message = reader.span(start).to_vec();
-            finish(version, signatures, header[0], account_keys, recent_blockhash, instructions, message)
+            finish(
+                version,
+                signatures,
+                header[0],
+                account_keys,
+                recent_blockhash,
+                instructions,
+                message,
+            )
         } else if first == 0x81 {
             // v1: the message comes first, then one signature per required signer.
             let start = reader.position() - 1;
@@ -287,16 +296,31 @@ mod tests {
     fn unknown_versions_and_masks_are_refused() {
         let mut bytes = v0_transaction(1, &[b"x"]);
         bytes[1 + 64] = 0x82;
-        assert_eq!(Transaction::parse(&bytes), Err(Error::UnsupportedTransaction));
+        assert_eq!(
+            Transaction::parse(&bytes),
+            Err(Error::UnsupportedTransaction)
+        );
         // A v1 message is not allowed behind a legacy-style signature list.
         bytes[1 + 64] = 0x81;
-        assert_eq!(Transaction::parse(&bytes), Err(Error::UnsupportedTransaction));
+        assert_eq!(
+            Transaction::parse(&bytes),
+            Err(Error::UnsupportedTransaction)
+        );
         let mut bytes = v1_transaction(1, &[b"x"]);
         bytes[4] = 0b10_0000;
-        assert_eq!(Transaction::parse(&bytes), Err(Error::UnsupportedTransaction));
+        assert_eq!(
+            Transaction::parse(&bytes),
+            Err(Error::UnsupportedTransaction)
+        );
         bytes[4] = 0b01;
-        assert_eq!(Transaction::parse(&bytes), Err(Error::UnsupportedTransaction));
-        assert_eq!(Transaction::parse(&[0x85]), Err(Error::UnsupportedTransaction));
+        assert_eq!(
+            Transaction::parse(&bytes),
+            Err(Error::UnsupportedTransaction)
+        );
+        assert_eq!(
+            Transaction::parse(&[0x85]),
+            Err(Error::UnsupportedTransaction)
+        );
     }
 
     #[test]

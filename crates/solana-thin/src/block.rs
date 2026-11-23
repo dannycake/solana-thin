@@ -59,7 +59,7 @@ pub enum Marker {
         parent: BlockRef,
     },
     /// The footer.
-    Footer(Footer),
+    Footer(Box<Footer>),
     /// The one-off certificate that started Alpenglow.
     GenesisCertificate,
 }
@@ -111,12 +111,12 @@ pub fn parse_marker(data: &[u8]) -> Result<Marker> {
             };
             // Reward certificates follow. They pay validators and say nothing
             // a light client relies on, so they are left unread.
-            Ok(Marker::Footer(Footer {
+            Ok(Marker::Footer(Box::new(Footer {
                 bank_hash,
                 producer_time_nanos,
                 user_agent,
                 finality,
-            }))
+            })))
         }
         MARKER_GENESIS_CERTIFICATE => Ok(Marker::GenesisCertificate),
         _ => Err(Error::InvalidComponent("marker kind")),
@@ -260,7 +260,10 @@ mod tests {
         padded.extend_from_slice(&[0; 100]);
         assert!(parse_marker(&padded).is_ok());
         let short = testkit::header_component(&parent);
-        assert_eq!(parse_marker(&short[..short.len() - 1]), Err(Error::Truncated));
+        assert_eq!(
+            parse_marker(&short[..short.len() - 1]),
+            Err(Error::Truncated)
+        );
     }
 
     #[test]
@@ -268,9 +271,15 @@ mod tests {
         let batch = testkit::entry_batch(&[vec![legacy_transaction(1, &[b"m"])]]);
         assert!(parse_marker(&batch).is_err());
         assert!(is_entry_batch(&batch));
-        let header = testkit::header_component(&BlockRef { slot: 1, id: [0; 32] });
+        let header = testkit::header_component(&BlockRef {
+            slot: 1,
+            id: [0; 32],
+        });
         assert!(!is_entry_batch(&header));
-        let pos = TxPosition { entry: 0, transaction: 0 };
+        let pos = TxPosition {
+            entry: 0,
+            transaction: 0,
+        };
         assert!(transaction_at(&header, pos).is_err());
     }
 
@@ -299,19 +308,30 @@ mod tests {
 
     #[test]
     fn footer_carries_time_and_certificate() {
-        let block = BlockRef { slot: 9, id: [5; 32] };
+        let block = BlockRef {
+            slot: 9,
+            id: [5; 32],
+        };
         let agg = |b: u8| Aggregate {
             signature: [b; 96],
             bitmap: vec![0, 8, 0, 0xff],
         };
-        let fast = FinalityCert::Fast { block, notar: agg(1) };
+        let fast = FinalityCert::Fast {
+            block,
+            notar: agg(1),
+        };
         let slow = FinalityCert::Slow {
             block,
             finalize: agg(2),
             notar: agg(3),
         };
         for cert in [None, Some(fast), Some(slow)] {
-            let bytes = testkit::footer_component([8; 32], 1_700_000_000_000_000_000, b"agave/4.4", cert.as_ref());
+            let bytes = testkit::footer_component(
+                [8; 32],
+                1_700_000_000_000_000_000,
+                b"agave/4.4",
+                cert.as_ref(),
+            );
             let Marker::Footer(footer) = parse_marker(&bytes).unwrap() else {
                 panic!("not a footer");
             };

@@ -104,8 +104,14 @@ fn vote_payloads_match() {
         id: array(&p["block_id"]),
     };
     let version = v["shred_version"].as_u64().unwrap() as u16;
-    assert_eq!(notarize_payload(&block, version).to_vec(), bytes(&p["notarize"]));
-    assert_eq!(finalize_payload(block.slot, version).to_vec(), bytes(&p["finalize"]));
+    assert_eq!(
+        notarize_payload(&block, version).to_vec(),
+        bytes(&p["notarize"])
+    );
+    assert_eq!(
+        finalize_payload(block.slot, version).to_vec(),
+        bytes(&p["finalize"])
+    );
 }
 
 #[test]
@@ -133,7 +139,11 @@ fn certificate_verdicts_match_agaves_verifier() {
         };
         let ours = client.verify_finality(&cert);
         let agave = case["agave_accepts"].as_bool().unwrap();
-        assert_eq!(ours.is_ok(), agave, "{name}: we said {ours:?}, Agave said {agave}");
+        assert_eq!(
+            ours.is_ok(),
+            agave,
+            "{name}: we said {ours:?}, Agave said {agave}"
+        );
         if agave {
             accepted += 1;
         } else {
@@ -141,7 +151,10 @@ fn certificate_verdicts_match_agaves_verifier() {
         }
     }
     // The vectors exercise both outcomes.
-    assert!(accepted >= 4 && rejected >= 8, "{accepted} accepted, {rejected} rejected");
+    assert!(
+        accepted >= 4 && rejected >= 8,
+        "{accepted} accepted, {rejected} rejected"
+    );
 }
 
 #[test]
@@ -235,6 +248,7 @@ fn every_agave_transaction_is_provable_and_parses_identically() {
     let certs = [cert_1, cert_2, cert_3.clone()];
 
     let mut proven = 0;
+    let mut versions = std::collections::BTreeMap::new();
     for (i, (json, block)) in json_blocks.iter().zip(&blocks).enumerate() {
         let footer = &json["footer"];
         for tx in json["transactions"].as_array().unwrap() {
@@ -273,6 +287,12 @@ fn every_agave_transaction_is_provable_and_parses_identically() {
             }
 
             let verified = client.verify_transaction(&direct).unwrap();
+            *versions
+                .entry(format!("{:?}", verified.transaction.version))
+                .or_insert(0) += 1;
+            if verified.transaction.signatures.len() > 1 {
+                *versions.entry("multi-signer".to_string()).or_insert(0) += 1;
+            }
             let opened = verified.footer.expect("footer opened");
             assert_eq!(opened.bank_hash, array::<32>(&footer["bank_hash"]));
             assert_eq!(
@@ -280,11 +300,22 @@ fn every_agave_transaction_is_provable_and_parses_identically() {
                 footer["producer_time_nanos"].as_u64().unwrap()
             );
             assert_eq!(opened.user_agent, bytes(&footer["user_agent"]));
-            assert_eq!(direct.footer_start, Some(footer["start"].as_u64().unwrap() as u32));
+            assert_eq!(
+                direct.footer_start,
+                Some(footer["start"].as_u64().unwrap() as u32)
+            );
             proven += 1;
         }
     }
     assert!(proven >= 240, "only {proven} transactions in the vectors");
+    // All three encodings, and transactions with more than one signature.
+    println!("agave transactions proven: {proven} {versions:?}");
+    for kind in ["Legacy", "V0", "V1", "multi-signer"] {
+        assert!(
+            versions.get(kind).copied().unwrap_or(0) >= 2,
+            "too few {kind}"
+        );
+    }
 }
 
 #[test]
@@ -314,7 +345,14 @@ fn agave_shreds_reject_tampering() {
     let good = prover::prove(cert, &[&blocks[0]], &signature, false).unwrap();
     assert!(client.verify_transaction(&good).is_ok());
     let mut bad = good.clone();
-    let shred = bad.block.sets.last_mut().unwrap().shreds.last_mut().unwrap();
+    let shred = bad
+        .block
+        .sets
+        .last_mut()
+        .unwrap()
+        .shreds
+        .last_mut()
+        .unwrap();
     shred.body[20] ^= 0x80;
     assert_eq!(client.verify_transaction(&bad), Err(Error::BlockIdMismatch));
 }

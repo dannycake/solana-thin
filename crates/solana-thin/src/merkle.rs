@@ -116,14 +116,7 @@ pub fn data_range_root(first: usize, leaves: &[Hash], siblings: &[Node]) -> Resu
         return Err(Error::InvalidMerkleProof);
     }
     let mut siblings = siblings.iter();
-    let root = range_node(
-        0,
-        DATA_TREE_DEPTH,
-        first,
-        end,
-        leaves,
-        &mut siblings,
-    )?;
+    let root = range_node(0, DATA_TREE_DEPTH, first, end, leaves, &mut siblings)?;
     if siblings.next().is_some() {
         return Err(Error::InvalidMerkleProof);
     }
@@ -245,13 +238,25 @@ mod tests {
     use super::*;
 
     fn leaves(n: usize) -> Vec<Hash> {
-        (0..n).map(|i| sha256(&[&(i as u64).to_le_bytes()])).collect()
+        (0..n)
+            .map(|i| sha256(&[&(i as u64).to_le_bytes()]))
+            .collect()
     }
 
     #[test]
     fn path_len_matches_agave() {
         // get_proof_size() in Agave for a few sizes.
-        for (n, want) in [(1, 0), (2, 1), (3, 2), (4, 2), (5, 3), (8, 3), (9, 4), (64, 6), (65, 7)] {
+        for (n, want) in [
+            (1, 0),
+            (2, 1),
+            (3, 2),
+            (4, 2),
+            (5, 3),
+            (8, 3),
+            (9, 4),
+            (64, 6),
+            (65, 7),
+        ] {
             assert_eq!(path_len(n), want, "n = {n}");
         }
     }

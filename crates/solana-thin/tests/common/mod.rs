@@ -44,12 +44,19 @@ pub fn world() -> World {
         1000,
         genesis,
         SHRED_VERSION,
-        &[vec![(0..5).map(|i| legacy_transaction(i, &[b"block one"])).collect()]],
+        &[vec![(0..5)
+            .map(|i| legacy_transaction(i, &[b"block one"]))
+            .collect()]],
         None,
     );
-    let cert_b1 = validators.fast_cert(b1.block(), &validators.ranks_reaching(8_000), SHRED_VERSION);
+    let cert_b1 =
+        validators.fast_cert(b1.block(), &validators.ranks_reaching(8_000), SHRED_VERSION);
     let big: Vec<Vec<Vec<u8>>> = (0..6)
-        .map(|e| (0..25).map(|t| sized_transaction(100 + e * 25 + t, 300)).collect())
+        .map(|e| {
+            (0..25)
+                .map(|t| sized_transaction(100 + e * 25 + t, 300))
+                .collect()
+        })
         .collect();
     let mixed = vec![vec![
         legacy_transaction(500, &[b"legacy"]),
@@ -57,7 +64,13 @@ pub fn world() -> World {
         v1_transaction(502, &[b"v1"]),
         legacy_transaction(503, &[b"anchor:0123456789abcdef"]),
     ]];
-    let b2 = simple_block(1002, b1.block(), SHRED_VERSION, &[big, mixed], Some(&cert_b1));
+    let b2 = simple_block(
+        1002,
+        b1.block(),
+        SHRED_VERSION,
+        &[big, mixed],
+        Some(&cert_b1),
+    );
     let b3 = simple_block(
         1003,
         b2.block(),

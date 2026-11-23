@@ -291,7 +291,11 @@ impl ThinClient {
         match block::parse_marker(&shreds.component(0)?)? {
             Marker::Header { parent } if parent == shreds.parent => {}
             Marker::Header { .. } => return Err(Error::UpdateParentBlock),
-            _ => return Err(Error::InvalidComponent("block does not start with a header")),
+            _ => {
+                return Err(Error::InvalidComponent(
+                    "block does not start with a header",
+                ))
+            }
         }
 
         // 5. Parse the transaction's component from its true start.
@@ -305,7 +309,7 @@ impl ThinClient {
         let footer = match proof.footer_start {
             None => None,
             Some(start) => match block::parse_marker(&shreds.component(start)?)? {
-                Marker::Footer(footer) => Some(footer),
+                Marker::Footer(footer) => Some(*footer),
                 _ => return Err(Error::InvalidComponent("not a footer")),
             },
         };

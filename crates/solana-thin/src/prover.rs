@@ -91,7 +91,9 @@ impl BlockData {
                 return Err(Error::MissingShred(i as u32));
             }
             if shred.slot != slot || shred.shred_version != version {
-                return Err(Error::InvalidShred("slot or version differs within the block"));
+                return Err(Error::InvalidShred(
+                    "slot or version differs within the block",
+                ));
             }
             if shred.fec_set_index != (i - i % DATA_SHREDS_PER_FEC_SET) as u32 {
                 return Err(Error::InvalidShred("FEC set index"));
@@ -104,7 +106,9 @@ impl BlockData {
             let root = set[0].fec_set_root()?;
             for shred in set {
                 if shred.fec_set_root()? != root {
-                    return Err(Error::InvalidShred("shreds of one FEC set disagree on its root"));
+                    return Err(Error::InvalidShred(
+                        "shreds of one FEC set disagree on its root",
+                    ));
                 }
             }
             fec_roots.push(root);
@@ -126,7 +130,9 @@ impl BlockData {
             }
         }
         if current.is_some() {
-            return Err(Error::InvalidComponent("block does not end on a component boundary"));
+            return Err(Error::InvalidComponent(
+                "block does not end on a component boundary",
+            ));
         }
 
         let mut parent = None;
@@ -142,7 +148,9 @@ impl BlockData {
                 _ => {}
             }
         }
-        let parent = parent.ok_or(Error::InvalidComponent("block does not start with a header"))?;
+        let parent = parent.ok_or(Error::InvalidComponent(
+            "block does not start with a header",
+        ))?;
         let parent = final_parent.unwrap_or(parent);
 
         let fec_set_count = fec_roots.len() as u32;
@@ -193,7 +201,7 @@ impl BlockData {
                 return None;
             }
             match block::parse_marker(&c.data) {
-                Ok(Marker::Footer(footer)) => Some((c.start, footer)),
+                Ok(Marker::Footer(footer)) => Some((c.start, *footer)),
                 _ => None,
             }
         })
@@ -241,12 +249,10 @@ impl BlockData {
         needed.extend(component.start..=component.last_shred_for(end));
         let mut footer_start = None;
         if with_footer {
-            if let Some(footer) = self
-                .components
-                .iter()
-                .find(|c| !block::is_entry_batch(&c.data)
-                    && matches!(block::parse_marker(&c.data), Ok(Marker::Footer(_))))
-            {
+            if let Some(footer) = self.components.iter().find(|c| {
+                !block::is_entry_batch(&c.data)
+                    && matches!(block::parse_marker(&c.data), Ok(Marker::Footer(_)))
+            }) {
                 needed.insert(footer.start - 1);
                 needed.extend(footer.start..=footer.last_shred_for(footer.data.len()));
                 footer_start = Some(footer.start);

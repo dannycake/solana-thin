@@ -45,6 +45,7 @@ use {
     },
     solana_message::{
         AddressLookupTableAccount, Message, VersionedMessage, v0,
+        v1::{self, TransactionConfig},
     },
     solana_pubkey::Pubkey,
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
@@ -323,6 +324,37 @@ fn transfer_v0(payer: &Keypair, blockhash: Hash, lamports: u64) -> VersionedTran
     VersionedTransaction::try_new(VersionedMessage::V0(message), &[payer]).unwrap()
 }
 
+fn transfer_v1(
+    payer: &Keypair,
+    cosigner: Option<&Keypair>,
+    blockhash: Hash,
+    lamports: u64,
+    config: TransactionConfig,
+) -> VersionedTransaction {
+    let to = Pubkey::new_unique();
+    let mut ixs = vec![system_instruction::transfer(&payer.pubkey(), &to, lamports)];
+    if let Some(cosigner) = cosigner {
+        ixs.push(system_instruction::transfer(&cosigner.pubkey(), &to, 1));
+    }
+    let message =
+        v1::Message::try_compile_with_config(&payer.pubkey(), &ixs, blockhash, config).unwrap();
+    let message = VersionedMessage::V1(message);
+    match cosigner {
+        Some(cosigner) => VersionedTransaction::try_new(message, &[payer, cosigner]).unwrap(),
+        None => VersionedTransaction::try_new(message, &[payer]).unwrap(),
+    }
+}
+
+fn transfer_two_signers(payer: &Keypair, cosigner: &Keypair, blockhash: Hash) -> VersionedTransaction {
+    let to = Pubkey::new_unique();
+    let ixs = [
+        system_instruction::transfer(&payer.pubkey(), &to, 3),
+        system_instruction::transfer(&cosigner.pubkey(), &to, 4),
+    ];
+    let message = Message::new(&ixs, Some(&payer.pubkey()));
+    VersionedTransaction::from(Transaction::new(&[payer, cosigner], message, blockhash))
+}
+
 struct BuiltBlock {
     slot: u64,
     parent: Block,
@@ -491,6 +523,7 @@ fn main() {
     let ledger = get_tmp_ledger_path_auto_delete!();
     let blockstore = Blockstore::open(ledger.path()).unwrap();
     let payer = Keypair::new();
+    let cosigner = Keypair::new();
     let blockhash = Hash::new_from_array([0x42; 32]);
     let entry = |i: u64, transactions: Vec<VersionedTransaction>| Entry {
         num_hashes: 1 + i,
@@ -511,7 +544,17 @@ fn main() {
         vec![vec![
             entry(0, vec![transfer(&payer, blockhash, 1), memo_legacy(&payer, blockhash, b"solana-thin")]),
             entry(1, vec![]),
-            entry(2, vec![transfer_v0(&payer, blockhash, 5)]),
+            entry(2, vec![
+                transfer_v0(&payer, blockhash, 5),
+                transfer_v1(&payer, None, blockhash, 6, TransactionConfig::default()),
+                transfer_v1(&payer, None, blockhash, 7, TransactionConfig {
+                    priority_fee: Some(12_345),
+                    compute_unit_limit: Some(200_000),
+                    loaded_accounts_data_size_limit: Some(65_536),
+                    heap_size: Some(64 * 1024),
+                }),
+                transfer(&payer, blockhash, 8),
+            ]),
         ]],
         None,
     );
@@ -532,6 +575,20 @@ fn main() {
                 memo_legacy(&payer, blockhash, &[0xab; 600]),
                 transfer_v0(&payer, blockhash, 9),
                 memo_legacy(&payer, blockhash, b"anchor"),
+                transfer_v1(&payer, Some(&cosigner), blockhash, 10, TransactionConfig {
+                    priority_fee: None,
+                    compute_unit_limit: Some(50_000),
+                    loaded_accounts_data_size_limit: None,
+                    heap_size: None,
+                }),
+                transfer_two_signers(&payer, &cosigner, blockhash),
+                transfer_v1(&payer, None, blockhash, 11, TransactionConfig {
+                    priority_fee: Some(1),
+                    compute_unit_limit: None,
+                    loaded_accounts_data_size_limit: None,
+                    heap_size: None,
+                }),
+                transfer(&payer, blockhash, 12),
             ])],
         ],
         Some(footer_cert(&validators, b1_ref, false)),

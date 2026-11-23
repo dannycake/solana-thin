@@ -23,7 +23,10 @@ fn every_transaction_of_every_block_is_provable() {
 
             // The encoded form says the same thing.
             let bytes = proof.to_bytes();
-            assert_eq!(TxProof::from_bytes(&bytes, &Limits::default()).unwrap(), proof);
+            assert_eq!(
+                TxProof::from_bytes(&bytes, &Limits::default()).unwrap(),
+                proof
+            );
             assert_eq!(w.client.verify_transaction_bytes(&bytes).unwrap(), verified);
             proven += 1;
         }
@@ -62,7 +65,9 @@ fn slow_finality_is_accepted_when_both_halves_reach_sixty_percent() {
         bottom.push(*rank);
     }
     bottom.sort();
-    let cert = w.validators.slow_cert(block, &sixty, &bottom, SHRED_VERSION);
+    let cert = w
+        .validators
+        .slow_cert(block, &sixty, &bottom, SHRED_VERSION);
     let finalized = w.client.verify_finality(&cert).unwrap();
     assert_eq!(finalized.finality, Finality::Slow);
 
@@ -81,7 +86,10 @@ fn all_three_transaction_encodings_are_walked() {
         (503, MessageVersion::Legacy, b"anchor:0123456789abcdef"),
     ] {
         let signature = signature_for(seed);
-        let verified = w.client.verify_signature(&w.proof(1, &signature), &signature).unwrap();
+        let verified = w
+            .client
+            .verify_signature(&w.proof(1, &signature), &signature)
+            .unwrap();
         assert_eq!(verified.transaction.version, version);
         assert!(verified.has_memo(memo));
         assert!(!verified.has_memo(b"something else"));
@@ -121,9 +129,11 @@ fn resigned_shreds_verify_too() {
         .component(&entry_batch(&[vec![]]))
         .build();
     let block = prover::BlockData::from_shreds(&payloads).unwrap();
-    let cert = w
-        .validators
-        .fast_cert(block.block(), &w.validators.ranks_reaching(8_000), SHRED_VERSION);
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
     for signature in block.signatures() {
         let proof = prover::prove(cert.clone(), &[&block], &signature, true).unwrap();
         w.client.verify_signature(&proof, &signature).unwrap();
@@ -142,10 +152,18 @@ fn proofs_stay_small() {
     // the whole batch in front of it. That is the worst case for this block.
     let last = w.proof(1, &signature_for(249)).to_bytes();
     let first = w.proof(1, &signature_for(100)).to_bytes();
-    assert!(first.len() < 3_000, "first-in-batch proof is {} bytes", first.len());
+    assert!(
+        first.len() < 3_000,
+        "first-in-batch proof is {} bytes",
+        first.len()
+    );
     // The batch itself is about 47 KB; the proof adds under 10% to that.
     let batch: usize = w.blocks[1].components().nth(1).unwrap().1.len();
-    assert!(last.len() < batch + batch / 10, "last-in-batch proof is {} bytes", last.len());
+    assert!(
+        last.len() < batch + batch / 10,
+        "last-in-batch proof is {} bytes",
+        last.len()
+    );
     assert!(first.len() < last.len());
     println!("proof sizes: small batch {}, first of large batch {}, last of large batch {} (batch {batch})",
         small.len(), first.len(), last.len());
@@ -166,13 +184,18 @@ fn stale_mode_accepts_a_next_epoch_certificate_from_known_signers() {
     let slot = 432_000 + 17;
     let block = simple_block(
         slot,
-        BlockRef { slot: slot - 1, id: [3; 32] },
+        BlockRef {
+            slot: slot - 1,
+            id: [3; 32],
+        },
         SHRED_VERSION,
         &[vec![vec![legacy_transaction(1, &[b"epoch one"])]]],
         None,
     );
     let ninety = w.validators.ranks_reaching(9_000);
-    let cert = w.validators.fast_cert(block.block(), &ninety, SHRED_VERSION);
+    let cert = w
+        .validators
+        .fast_cert(block.block(), &ninety, SHRED_VERSION);
     assert_eq!(w.client.verify_finality(&cert), Err(Error::UnknownEpoch(1)));
 
     // Opt in, and supply the (unverified) key order for epoch 1. Here it is
@@ -188,8 +211,12 @@ fn stale_mode_accepts_a_next_epoch_certificate_from_known_signers() {
             proof_of_possession: None,
         })
         .collect();
-    w.client.add_candidate_set(1, CandidateSet::new(candidates).unwrap());
-    assert_eq!(w.client.verify_finality(&cert).unwrap().block, block.block());
+    w.client
+        .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
+    assert_eq!(
+        w.client.verify_finality(&cert).unwrap().block,
+        block.block()
+    );
 
     let signature = signature_for(1);
     let proof = prover::prove(cert, &[&block], &signature, false).unwrap();
