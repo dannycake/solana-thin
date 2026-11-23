@@ -59,12 +59,31 @@ footers, so a prover can copy one off the ledger.
 
 ## Validator sets
 
-`runtime/src/epoch_stakes.rs` (`BLSPubkeyToRankMap`).
+`runtime/src/epoch_stakes.rs` (`BLSPubkeyToRankMap`), `runtime/src/bank.rs`
+(`get_top_epoch_stakes`), `vote/src/vote_account.rs`
+(`clone_and_filter_for_vat`).
 
-Rank order is stake descending, then compressed BLS key bytes ascending.
-Vote accounts with zero stake or no BLS key are dropped, and so is *every*
-account that shares a BLS key or a node identity with another.
-`ValidatorSet::from_vote_accounts` reproduces this; `from_ranked` accepts only
+Membership is decided in two steps.
+
+**Admission** (SIMD-0357). At the first block of an epoch the cluster keeps
+vote accounts that have stake, a BLS key, and a lamport balance of at least
+the rent-exempt minimum plus one epoch's Validator Admission Ticket (0.8 SOL
+on mainnet in November 2026; it scales with slot time). If more than 2,000
+qualify, the lowest-staked are cut. Each admitted account is debited the
+ticket, and the debit appears in that block's rewards as `VATDebit`.
+
+This step cannot be reproduced from `getVoteAccounts`, which lists every
+staked account whatever its balance, and balances read later do not say what
+they were at that block. The debits do: `tools/fetch_vote_accounts.py` reads
+them and keeps only accounts that paid. On mainnet in epoch 1095 that was 664
+of 684 staked accounts with a key. The 20 left out held 0.02% of stake, and
+one wrong member is enough to shift every rank below it and fail every
+certificate.
+
+**Ranking.** Of the admitted accounts, *every* account that shares a BLS key
+or a node identity with another is dropped. The rest are ordered by stake
+descending, then compressed BLS key bytes ascending.
+`ValidatorSet::from_vote_accounts` does this step; `from_ranked` accepts only
 the canonical list.
 
 The set hash is
@@ -73,7 +92,16 @@ The set hash is
 **Which epoch's stake.** Certificates for slots in epoch `E` are checked
 against the stake snapshot taken at the start of epoch `E − 1`. That is the
 stake `getVoteAccounts` reports as active during epoch `E − 1`. So the set for
-the next epoch can be fetched at any time during the current one.
+the next epoch can be fetched during the current one.
+
+This was checked on a cluster of four running validators whose stake moved
+every epoch: pinning the set fetched one epoch earlier verified 705 of 705
+certificates across 14 epochs; pinning the set from the same epoch, or from
+two epochs earlier, rejected 19 each (see `docs/LOCAL-VALIDATOR.md`).
+
+Fetch early in the epoch. The snapshot froze each account's BLS key and node
+identity at the epoch's first block, and RPC reports them as they are now. An
+account that changes either mid-epoch yields a wrong set from a late fetch.
 
 **Why the hash must be pinned.** BLS aggregation is safe only if every key in
 the set has proven possession of its secret. The vote program checks that at
@@ -103,13 +131,27 @@ normalized stake vectors, treating validators that left as weight zero. A
 signer set holding `τ + d` of old stake holds at least `τ` of new stake. If
 `d ≤ drift × j`, the certificate meets the real threshold.
 
-The weak point is the "if". Stake activation and deactivation are each capped
-at 9% of total stake per epoch, which motivates 900 basis points. Validators
-can also leave the set by other routes (losing their BLS key registration,
-key collisions) that this cap does not cover. Stale mode is a grace window of
-an epoch or two, not a way to follow the chain indefinitely. It cannot be
-chained: a set accepted this way never becomes a base for another step,
-because the client never learns the new stakes.
+The weak point is the "if", and it is weaker than a rate limit suggests.
+Stake activation and deactivation are each capped at 9% of total stake per
+epoch, which motivates 900 basis points. That cap does not bound `d`:
+
+- **Stake can enter the set without activating.** Stake that is already
+  active but outside the ranked set joins at full weight in one epoch when
+  its validator registers a BLS key, tops up its admission balance, or stops
+  sharing a key or node identity with another account. If a share `x` of the
+  new total arrives this way, signers holding 89% of pinned stake hold
+  `0.89 × (1 − x)` of real stake, which is under 80% once `x` exceeds 10.1%.
+  The client would report fast finality for a block that only 72% notarized
+  when `x` is 19%.
+- **The margin has no slack.** 9% deactivating among the signers and 9%
+  activating elsewhere lands exactly on the threshold.
+- Validators can also leave by the same routes.
+
+So stale mode is not a proof under any assumption the protocol enforces. It
+is a grace window for an application that would otherwise have no answer, to
+be used for an epoch at most and never for value. It cannot be chained: a set
+accepted this way never becomes a base for another step, because the client
+never learns the new stakes.
 
 ## Block ids
 
@@ -161,6 +203,16 @@ transaction is to parse from the start of the batch. So the verifier requires:
    header to the *first*. Agave rejects an `UpdateParent` that names the same
    parent as the header (`UpdateParentMatchesBlockHeader`), so equality means
    no switch happened and the whole block ran.
+
+   The header must be read from **shred 0 alone**, not from the first
+   component. Agave's blockstore records the header's parent only when the
+   header parses from shred 0's own bytes (`ParentInfo::maybe_parse_block_header`).
+   A leader can let a 54-byte header run on into shred 1. The blockstore then
+   sees no header, has nothing to compare an `UpdateParent` against, and
+   accepts one that names the *same* parent. Header and tree agree, and the
+   prefix was still thrown away. v0.1 first read the header from the whole
+   component and accepted a transaction from such a prefix; a review found
+   it. The test is `a_header_split_across_shreds_does_not_hide_an_abandoned_prefix`.
 2. **The shred before the component, flagged `DATA_COMPLETE`.** Without it a
    proof could start parsing in the middle of a batch, inside bytes an
    attacker chose. The flag is inside the hashed leaf.
@@ -171,6 +223,17 @@ Then the batch is walked (`count`, then per entry `num_hashes`, `hash`,
 `tx_count`, transactions) to the claimed position. The transaction parser
 handles legacy, v0 and v1 encodings and has one job: consume exactly the bytes
 a validator would for every valid transaction.
+
+Replay parses transactions with `agave-transaction-view`
+(`entry/src/block_component_parser.rs`), which is stricter than this parser:
+at most 12 signatures, single-byte key and lookup-table counts, compact
+integers of at most two bytes. Everything it accepts, this parser reads to the
+same length. What this parser accepts beyond that can only occur in bytes a
+validator never executed, which is what the two rules above exist to exclude.
+
+Agave discards a data shred flagged `DATA_COMPLETE` unless it is the last of
+its FEC set (`ledger/src/shred/filter.rs`), so in practice components align
+to FEC sets. The verifier does not rely on that; it follows the flags.
 
 ## Proof format
 
@@ -232,5 +295,8 @@ upstream yet.
 - Is fast leader handover active on mainnet, and how often do blocks switch
   parent? That decides whether supporting those blocks is worth the extra
   rules.
-- Stale mode's drift assumption deserves a proper analysis against the ways a
-  validator can leave the set.
+- Is there any other place where the verifier reads a block differently from
+  a validator? The split header was one. Each such difference is a way to
+  show a client bytes that never ran.
+- Stale mode has no sound bound today. Is there one worth having, or should
+  it go?

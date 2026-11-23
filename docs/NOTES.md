@@ -7,7 +7,7 @@ came from, what was tried and dropped, and what to do next.
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test`: 77 tests pass (35 unit, 20 attacks, 8 conformance, 8
+- `cargo test`: 78 tests pass (35 unit, 21 attacks, 8 conformance, 8
   end-to-end, 2 mainnet snapshot, 3 properties, 1 doctest). The attack suite
   takes about 25 seconds; the rest is quick.
 - `cargo clippy --workspace --all-targets --features testkit -- -D warnings`
@@ -16,7 +16,9 @@ came from, what was tried and dropped, and what to do next.
   1.75 and never built there: with the committed `Cargo.lock`, `blst` pulls in
   `zeroize_derive` 1.5, which is an edition 2024 crate.
 - There is no CI. Run the three commands above before pushing.
-- Unaudited. Nobody but the author has read the code.
+- Unaudited. One independent read against Agave v4.4.1's source was done on
+  2026-11-23 and found a soundness bug; see "Review findings" below. That is
+  a reason to expect more, not fewer.
 
 ## What is verified, and how strongly
 
@@ -25,18 +27,21 @@ came from, what was tried and dropped, and what to do next.
 | Block id computation is right | Equal to ids read back from an Agave v4.4.1 `Blockstore` for 3 blocks | Strong |
 | Vote payload bytes are right | Equal to `agave_votor_messages::wire::get_vote_payload_to_sign` | Strong |
 | BLS scheme and thresholds are right | Same verdict as `agave_bls_cert_verify::verify_certificate` on 13 certificates (5 accepted, 8 rejected) | Strong for the cases covered |
-| Validator ranking and filters are right | Equal to `BLSPubkeyToRankMap::new` on 14 random vote accounts, including zero stake and a duplicated key | Strong |
+| Validator ranking and filters are right | Equal to `BLSPubkeyToRankMap::new` on 14 random vote accounts, including zero stake and a duplicated key | Strong for ranking. Admission happens before the rank map and is handled by the fetch tool, not the crate |
 | Proof of possession format is right | Verifies PoPs made with `solana-bls-signatures` over the vote program's message | Strong |
 | Transaction walking is right | 254 Agave-serialized transactions (248 legacy, 2 v0, 4 v1, 2 multi-signer) parse to the same message bytes and positions | Good; v0 and v1 samples are few |
 | Footer and header parsing is right | Parses footers Agave serialized, including fast and slow embedded certificates | Good |
-| Live mainnet keys load | All 684 BLS keys from public RPC in epoch 1095 decode and pass subgroup checks | Strong, but says nothing about certificates |
-| Works against a running validator | 447 block ids, 446 footer certificates and 312 transactions from `solana-test-validator` v4.4.1; see `docs/LOCAL-VALIDATOR.md` | Strong for formats and the pipeline. One signer, so it says nothing about aggregation or thresholds |
+| Live mainnet keys load | The BLS keys of the 664 validators admitted in epoch 1095 decode and pass subgroup checks | Strong, but says nothing about certificates |
+| Works against a running validator | 447 block ids, 446 footer certificates and 312 transactions from `solana-test-validator` v4.4.1; see `docs/LOCAL-VALIDATOR.md` | Strong for formats and the pipeline. One signer |
+| Works against several running validators | 709 block ids and 705 certificates (330 fast, 375 slow) from a four-validator `LocalCluster`, over 14 epochs | Strong for aggregation, both thresholds, skipped slots. Four signers, not hundreds |
+| The epoch-stake offset is right | On that cluster every certificate verifies with the set fetched one epoch earlier; 19 fail with the same-epoch set and 19 with the set from two epochs earlier | Strong |
+| Membership of the mainnet set is right | 664 `VATDebit` entries in the first block of epoch 1095 match 664 staked accounts with keys; 20 staked accounts with keys had none | Good. Not confirmed by a certificate |
 | A live mainnet certificate verifies | **Not tested.** No source for shreds or footers was reachable. The genesis certificate was tried and could not be checked; see below | None |
 
 The Agave vectors use random keys, so regenerating them changes the bytes.
 The tests depend on structure, not on specific values.
 
-## Facts measured from mainnet during the session
+## Facts measured from mainnet
 
 All from `https://api.mainnet-beta.solana.com` on 2026-11-23.
 
@@ -52,13 +57,21 @@ All from `https://api.mainnet-beta.solana.com` on 2026-11-23.
 - Slot rate since activation: about 13.4 million slots in 33.2 days, roughly
   **214 ms per slot**. At 432,000 slots that makes an epoch about **26 hours**.
   This was computed from two block times, not read from a spec.
-- 686 vote accounts, 684 with a BLS key, 684 ranked. Total stake 425.9M SOL.
-  The top 58 validators hold 60% of stake and the top 137 hold 80%.
-- Validator set size 38,308 bytes; signer bitmap 89 bytes.
+- 686 vote accounts, 684 with stake and a BLS key, **664 admitted**. Total
+  admitted stake 425.8M SOL. The top 58 validators hold 60% of stake and the
+  top 137 hold 80%.
+- The first block of epoch 1095 (slot 473,040,000) has 664 `VATDebit` rewards
+  of 0.8 SOL each. 0.8 SOL is the ticket for 200 ms slots
+  (`runtime/src/slot_params.rs`), which fits the measured slot rate. The 20
+  staked accounts left out hold 0.02% of stake; the largest has 37,544 SOL
+  delegated.
+- Validator set size 37,188 bytes; signer bitmap 86 bytes.
 - Set hash for the snapshot in `tests/vectors/mainnet-vote-accounts.json`:
-  `90e2d142812017087d75ccc1918f5215fd99bb17b1dbba4b6f75372590905b6d`. Per the
-  epoch-stake rule below this should be the set for epoch **1096**. That has
-  not been confirmed against a certificate.
+  `7cc14b596ad61f6aff8b5e638831c3c40c1fd3b7a15d831f23e23a6c2515b1ee`. This
+  is the set for epoch **1096**. It replaces `90e2d142…`, which was built
+  from all 684 staked accounts and was wrong.
+- Fetching twice in the same epoch, 18,000 slots apart, gave identical
+  accounts. The hash is stable within an epoch.
 
 ### The genesis certificate, tried and not verified
 
@@ -72,7 +85,8 @@ but rounds stake to 10^-5 SOL, has ties at that precision, and one record
 with unreadable keys. A set rebuilt from it puts 82.15% of stake behind the
 bitmap, which is the right neighbourhood for a genesis certificate, but the
 signature does not verify, with or without a gap for the unreadable record.
-So this is not evidence either way about the crate.
+The rebuilt set also ignored admission, which was not understood at the time
+of the attempt. So this is not evidence either way about the crate.
 
 The lesson: fetch and keep `getVoteAccounts` every epoch from now on.
 A certificate can only be checked against a set that was saved in time.
@@ -115,7 +129,17 @@ refactoring (a `BlockId` newtype, `NonZeroStake`, a new
   one BlockComponent") and `ledger/src/shredder.rs` (`deshred`)
 - Parent marker rules: `ledger/src/blockstore.rs` (`ParentInfo`,
   `should_write_parent_info`, `UpdateParentMatchesBlockHeader`)
-- FEC set rules: `ledger/src/shred/merkle.rs` (`check_fec_set`, SIMD-0504)
+- FEC set rules: `ledger/src/shred/filter.rs` (32:32 sets, `DATA_COMPLETE`
+  only on the last data shred of a set). An earlier note here cited a
+  `check_fec_set` in `merkle.rs`; v4.4.1 has no such function.
+- Admission: `runtime/src/bank.rs` (`get_top_epoch_stakes`,
+  `minimum_vote_account_balance_for_vat`, `maybe_burn_vat_from_staked_accounts`),
+  `vote/src/vote_account.rs` (`clone_and_filter_for_vat`),
+  `runtime/src/slot_params.rs` for the ticket price
+- Where the blockstore reads the header: `ledger/src/blockstore.rs`
+  (`ParentInfo::maybe_parse_block_header`, shred 0 only)
+- Transaction parsing in replay: `entry/src/block_component_parser.rs`, which
+  uses `agave-transaction-view`, not `solana-transaction`
 - Bitmap encoding: crate `solana-signer-store` 0.1.0
 - BLS: crate `solana-bls-signatures` 4.0.0 (`src/hash.rs` for the domain tags)
 - PoP message: `programs/vote/src/vote_state/mod.rs` (`generate_pop_message`)
@@ -132,8 +156,8 @@ These are easy to get wrong and are not all spelled out in `DESIGN.md`.
 - **Which stake a certificate is checked against.**
   `bank.epoch_stakes_from_slot(slot)` uses the epoch of the certificate's slot.
   Epoch stakes for epoch `E + 1` are stored at the first slot of epoch `E`. So
-  `getVoteAccounts` during epoch `E` should give the set for `E + 1`. This was
-  derived from reading the code, not observed.
+  `getVoteAccounts` during epoch `E` gives the stake for `E + 1`. Observed on
+  a four-validator cluster; see `docs/LOCAL-VALIDATOR.md`.
 - **A fast certificate reuses the notarize payload.** Tag `0x01`, same bytes as
   a plain notarization. There is no separate "fast finalize" vote.
 - **Finalization certificates must use the base-2 bitmap.** Agave rejects the
@@ -143,9 +167,10 @@ These are easy to get wrong and are not all spelled out in `DESIGN.md`.
 - **Every component is padded to a whole FEC set.** A partly filled shred must
   be followed by empty shreds, and the last shred of the set must carry
   `DATA_COMPLETE`. A full FEC set may continue into the next one.
-- **`DATA_COMPLETE` may be set on any shred.** `check_fec_set` does not forbid
-  it mid-set, so the verifier follows the flags and does not assume components
-  align to FEC sets. Covered by `components_may_end_mid_fec_set`.
+- **`DATA_COMPLETE` is only kept on the last data shred of a FEC set.** Agave
+  discards any other shred that carries it (`filter.rs`). The verifier
+  follows the flags wherever they are, which accepts a superset and is
+  harmless. `components_may_end_mid_fec_set` tests a shape validators drop.
 - **Only two shred variants are accepted:** `0x96` (data) and `0xb6` (data with
   a retransmitter signature). Body capacity is 963 and 899 bytes.
 - **The Merkle leaf covers bytes 64 up to the proof**, which includes the
@@ -182,21 +207,51 @@ These are easy to get wrong and are not all spelled out in `DESIGN.md`.
 - **Transaction signatures are not re-verified.** A block with a badly signed
   transaction is invalid and would not be finalized.
 
+## Review findings (2026-11-23)
+
+One independent read of the verifier against Agave v4.4.1's source. Each
+finding was then checked against the source or the network before acting.
+
+1. **Soundness bug, fixed.** The verifier read the block header from the
+   whole first component; the blockstore reads it from shred 0 alone. A
+   leader could split the header over two shreds, switch to the same parent
+   with `UpdateParent`, and have the verifier accept a transaction from the
+   discarded prefix. Fix and test: `ThinClient::verify_transaction` step 4,
+   `a_header_split_across_shreds_does_not_hide_an_abandoned_prefix`. The
+   Agave side was read, not run: nobody built such a block on a validator.
+2. **Stale-set mode has a counterexample.** Stake that is active but outside
+   the ranked set can join in one epoch with no activation, so the 9% cap
+   does not bound drift. Documented; the mode is still there, off by default.
+3. **Admission was not reproduced, fixed in the tool.** See the mainnet facts
+   above. `ValidatorSet::from_vote_accounts` still ranks whatever it is
+   given; it is the fetch tool that drops accounts without a `VATDebit`.
+4. **"Fetch at any time during the epoch" was too strong.** Stake is frozen;
+   BLS key and node identity are read live. Documented.
+5. **A wrong claim about `DATA_COMPLETE`**, corrected above.
+6. **The replay transaction parser is `agave-transaction-view`** and is
+   stricter than this crate's. No length differs for anything it accepts.
+7. **A `u32` multiplication** in `BlockProof::verify` could overflow if a
+   caller raised `Limits::max_fec_sets` past 2^27. Now checked.
+
+Confirmed to match, with file and line, by the same read: shred header
+offsets and capacities, the leaf and node hashing, the double-Merkle tree and
+its parent leaf, component boundaries, marker and entry-batch layout, vote
+payloads, both thresholds, bitmap decoding, the rank map's filters and order,
+and both BLS domain tags. Not covered: `blst` against `blstrs` beyond the
+tags, base-3 bitmaps, pre-migration blocks, Agave's master branch.
+
 ## Things I am least sure of
 
-1. **Stale-set mode's drift assumption.** The 9% per epoch figure is the stake
-   warm-up and cool-down cap as I remember it; it was not re-checked in the
-   source. Validators can also leave the rank map by routes that cap does not
-   cover. Treat stale mode as experimental.
-2. **The epoch-stake offset** (the `E` versus `E + 1` rule above). One real
-   certificate would settle it.
+1. **Other places where the verifier and a validator read a block
+   differently.** The split header was one, and it was not found by any test
+   written beforehand. Firedancer was not read at all.
+2. **Stale-set mode.** No sound bound is known. It may be better removed.
 3. **Whether fast leader handover is active on mainnet.** If it is common,
    refusing those blocks will be a visible gap.
-4. **Batch sizes on mainnet.** Proof size depends on them and they were not
-   measured. The 1.9 KB and 50 KB figures come from synthetic blocks.
-5. **Validator admission (the "VAT" in `getVatActiveSetRankMap`).** If an
-   admission rule filters the rank map beyond what `BLSPubkeyToRankMap` does in
-   v4.4.1, `from_vote_accounts` would produce the wrong set. Not investigated.
+4. **Batch sizes on mainnet.** Proof size depends on them. The 2.0 KB and
+   31.5 KB figures come from a test validator with light traffic.
+5. **BLS key and node identity at the snapshot.** The fetch tool reads them
+   live. `getVatActiveSetRankMap`, when it ships, removes the guess.
 6. **The 2^80 leader collision attack** is my own analysis of the 20-byte
    Merkle truncation. Nobody has reviewed it.
 
@@ -260,14 +315,20 @@ the same as none existing.
    footer that certifies it. Routes, cheapest first: ask an RPC provider or a
    validator operator to run `ledger-dump` on one slot; fetch the shreds over
    the repair protocol from the `serveRepair` addresses in `getClusterNodes`;
-   subscribe to a shred stream. This settles items 2 to 5 in "least sure of",
+   subscribe to a shred stream. This settles items 3 to 5 in "least sure of",
    and it is the result a Solana engineer will ask for first.
+
+   On the repair route: v4.4.1's `core/src/repair/serve_repair.rs` answers
+   unstaked requesters (after a ping), dropping them first under load. It
+   also has `ParentAndFecSetCount` and `FecSetRoot` requests keyed by block
+   id, which return the same Merkle openings this crate's proofs carry. So
+   validators already serve most of a proof to each other. Not tried.
 2. **Save `getVoteAccounts` every epoch.** A cron job running
    `tools/fetch_vote_accounts.py`. Without it, step 1 has a one-epoch window.
-3. **A local cluster of several validators.** `solana-test-validator` has one
-   signer. Agave's `multinode-demo` scripts (built from source) would give
-   many-signer certificates, slow finalization and skipped slots from running
-   validators, and a short epoch to exercise the stake offset rule.
+3. **Build the split-header block on a real validator.** The fix follows
+   Agave's source, but the attack was only run against this crate. Shredding
+   such a block with Agave's `Shredder` and replaying it would show whether
+   validators really finalize it.
 4. **Outside review.** Post to the Solana developer forum and ask Anza or
    Firedancer engineers to check the certificate and block id handling. The
    three protocol asks in `DESIGN.md` are a natural thread.
