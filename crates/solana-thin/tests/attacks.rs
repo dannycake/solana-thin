@@ -669,6 +669,90 @@ fn a_transaction_in_an_abandoned_block_prefix_is_not_included() {
     }
 }
 
+/// The same attack with the header hidden from validators.
+///
+/// A validator refuses an UpdateParent that names the header's own parent,
+/// which is why "header parent equals tree parent" can stand for "no switch
+/// happened". But its blockstore only looks for the header in shred 0 by
+/// itself. Spread the header over shreds 0 and 1 and the blockstore sees no
+/// header, so an UpdateParent to the *same* parent is accepted, the tree
+/// commits to that parent, and the prefix is thrown away. A verifier that
+/// reads the header from the whole first component sees header and tree
+/// agree, and accepts a transaction that never ran.
+#[test]
+fn a_header_split_across_shreds_does_not_hide_an_abandoned_prefix() {
+    let w = world();
+    let parent = w.blocks[2].block();
+    let doomed = legacy_transaction(31337, &[b"never executed"]);
+    let kept = legacy_transaction(31338, &[b"executed"]);
+
+    let mut builder = BlockBuilder::new(1004, parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![doomed]]))
+        .component(&update_parent_component(&parent))
+        .component(&entry_batch(&[vec![kept]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]));
+
+    // Move the last 34 of the header's 54 bytes into shred 1.
+    let header = header_component(&parent);
+    assert_eq!(header.len(), 54);
+    let untrimmed = |bytes: &[u8]| {
+        let zeros = bytes.iter().rev().take_while(|b| **b == 0).count();
+        bytes[..bytes.len() - zeros].to_vec()
+    };
+    let first = builder.shred_mut(0);
+    first.size = 88 + 20;
+    first.body = untrimmed(&header[..20]);
+    let second = builder.shred_mut(1);
+    second.size = 88 + 34;
+    second.body = untrimmed(&header[20..]);
+    let payloads = builder.build();
+
+    // An honest prover finds no header where a validator would look.
+    assert_eq!(
+        BlockData::from_shreds(&payloads).unwrap_err(),
+        Error::UpdateParentBlock
+    );
+
+    let data = BlockData::from_shreds_with_final_parent(&payloads, parent).unwrap();
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    assert!(w.client.verify_finality(&cert).is_ok());
+
+    // The whole first component still reads as a header naming the tree's
+    // parent. That is what makes the attack work on a careless verifier.
+    let whole: Vec<u8> = data.components().next().unwrap().1.to_vec();
+    assert_eq!(
+        block::parse_marker(&whole).unwrap(),
+        block::Marker::Header { parent }
+    );
+
+    // Open the split header, the boundary before the doomed batch, and the
+    // batch itself. Every Merkle path is valid.
+    let needed: BTreeSet<u32> = [0, 1, 31, 32].into_iter().collect();
+    let proof = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: data.open(&needed),
+        component_start: 32,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(
+        w.client.verify_transaction_bytes(&proof.to_bytes()),
+        Err(Error::InvalidComponent(
+            "block does not start with a header"
+        ))
+    );
+}
+
 /// A valid opening of one block, attached to a valid certificate for another.
 #[test]
 fn shreds_of_one_block_do_not_open_another() {

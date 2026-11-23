@@ -147,7 +147,10 @@ impl BlockProof {
             if set.shreds.is_empty() || first + set.shreds.len() > DATA_SHREDS_PER_FEC_SET {
                 return Err(Error::InvalidShred("run outside its FEC set"));
             }
-            let fec_set_index = set.set * DATA_SHREDS_PER_FEC_SET as u32;
+            let fec_set_index = set
+                .set
+                .checked_mul(DATA_SHREDS_PER_FEC_SET as u32)
+                .ok_or(Error::InvalidShred("FEC set outside the block"))?;
             let mut leaves = Vec::with_capacity(set.shreds.len());
             for (offset, shred) in set.shreds.iter().enumerate() {
                 let index = fec_set_index + (first + offset) as u32;
@@ -180,6 +183,20 @@ impl<'a> VerifiedShreds<'a> {
             .get(&index)
             .copied()
             .ok_or(Error::MissingShred(index))
+    }
+
+    /// The data of shred 0 alone, where a validator looks for the block
+    /// header.
+    ///
+    /// Agave's blockstore records the header's parent only if the header
+    /// parses from shred 0's own bytes (`ParentInfo::maybe_parse_block_header`
+    /// in `ledger/src/blockstore.rs`). A header that runs on into shred 1 is
+    /// a header to anyone who reads the whole component, and no header at all
+    /// to the blockstore. The verifier has to see what the blockstore sees.
+    pub(crate) fn first_shred_data(&self) -> Result<Vec<u8>> {
+        let mut data = Vec::new();
+        self.get(0)?.append_data(&mut data)?;
+        Ok(data)
     }
 
     /// The bytes of the component that starts at shred `start`, as far as the

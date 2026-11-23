@@ -60,11 +60,18 @@ impl ClusterParams {
 /// signers holding `threshold + drift` of the old stake hold at least
 /// `threshold` of the new.
 ///
-/// This is an assumption about the world, not a proof. Solana caps how fast
-/// stake can activate and deactivate at 9% of the total per epoch, which is
-/// why 900 is the natural value, but a validator can also leave the set for
-/// reasons that cap does not cover. Keep `max_epochs` small and pin a fresh
-/// set as soon as you can get one.
+/// This is an assumption about the world, not a proof, and the protocol does
+/// not enforce it. Solana caps how fast stake can activate and deactivate at
+/// 9% of the total per epoch, which is where 900 comes from. But stake that is
+/// already active can join the ranked set in a single epoch without
+/// activating (its validator registers a BLS key, or tops up its admission
+/// balance), and that is not capped at all. If more than about a tenth of
+/// stake arrives that way, a certificate this accepts as final may be short
+/// of the real threshold. `docs/DESIGN.md` has the arithmetic.
+///
+/// Treat it as a grace window for showing something rather than nothing. Do
+/// not move value on it, keep `max_epochs` at one, and pin a fresh set as
+/// soon as you can get one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StalePolicy {
     /// How many epochs past a pinned set this may be used.
@@ -288,14 +295,18 @@ impl ThinClient {
         //    the parent the block ended on. If they differ the leader switched
         //    parent part way, and everything before the switch was discarded
         //    without being executed.
-        match block::parse_marker(&shreds.component(0)?)? {
-            Marker::Header { parent } if parent == shreds.parent => {}
-            Marker::Header { .. } => return Err(Error::UpdateParentBlock),
-            _ => {
-                return Err(Error::InvalidComponent(
-                    "block does not start with a header",
-                ))
-            }
+        //
+        //    The header is read from shred 0 alone, never from the whole
+        //    first component. A validator rejects an UpdateParent that names
+        //    the header's own parent, but only when it found a header in
+        //    shred 0 by itself. A leader that lets the header run on into
+        //    shred 1 escapes that rule: it can switch to the *same* parent
+        //    and abandon a prefix while the header still equals the tree.
+        const NO_HEADER: Error = Error::InvalidComponent("block does not start with a header");
+        match block::parse_marker(&shreds.first_shred_data()?) {
+            Ok(Marker::Header { parent }) if parent == shreds.parent => {}
+            Ok(Marker::Header { .. }) => return Err(Error::UpdateParentBlock),
+            _ => return Err(NO_HEADER),
         }
 
         // 5. Parse the transaction's component from its true start.

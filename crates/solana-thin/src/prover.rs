@@ -135,23 +135,30 @@ impl BlockData {
             ));
         }
 
-        let mut parent = None;
-        for (i, component) in components.iter().enumerate() {
+        // The header counts only if it sits whole in shred 0, which is where
+        // a validator's blockstore reads it. See `ThinClient::verify_transaction`.
+        let mut first_shred = Vec::new();
+        shreds[0].shred.append_data(&mut first_shred)?;
+        let parent = match block::parse_marker(&first_shred) {
+            Ok(Marker::Header { parent }) => Some(parent),
+            _ => None,
+        };
+        for component in &components {
             if block::is_entry_batch(&component.data) {
                 continue;
             }
-            match block::parse_marker(&component.data) {
-                Ok(Marker::Header { parent: p }) if i == 0 => parent = Some(p),
-                Ok(Marker::UpdateParent { .. }) if final_parent.is_none() => {
-                    return Err(Error::UpdateParentBlock)
+            if let Ok(Marker::UpdateParent { .. }) = block::parse_marker(&component.data) {
+                if final_parent.is_none() {
+                    return Err(Error::UpdateParentBlock);
                 }
-                _ => {}
             }
         }
-        let parent = parent.ok_or(Error::InvalidComponent(
-            "block does not start with a header",
-        ))?;
-        let parent = final_parent.unwrap_or(parent);
+        let parent = match final_parent {
+            Some(parent) => parent,
+            None => parent.ok_or(Error::InvalidComponent(
+                "block does not start with a header",
+            ))?,
+        };
 
         let fec_set_count = fec_roots.len() as u32;
         let mut leaves = fec_roots.clone();
