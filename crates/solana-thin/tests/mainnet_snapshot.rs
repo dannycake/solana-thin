@@ -1,10 +1,12 @@
-//! Real mainnet data: every vote account and BLS key the public RPC reported.
+//! Real mainnet data: the validators admitted for one epoch, with their keys.
 //!
 //! `tests/vectors/mainnet-vote-accounts.json` is the output of
 //! `tools/fetch_vote_accounts.py` against api.mainnet-beta.solana.com during
-//! epoch 1095 (November 2026, a month after Alpenglow went live). It checks
-//! the parts of this crate that touch live validator data: key decoding,
-//! subgroup checks, filtering, ranking and the set commitment.
+//! epoch 1095 (November 2026, a month after Alpenglow went live): the 664
+//! vote accounts that paid that epoch's admission ticket, which is the set
+//! for epoch 1096. It checks the parts of this crate that touch live
+//! validator data: key decoding, subgroup checks, ranking and the set
+//! commitment.
 //!
 //! It does not check a live certificate. Public RPC does not serve them yet;
 //! see the README.
