@@ -290,11 +290,13 @@ upstream yet.
 
 ## Open questions
 
-- How large are entry batches on mainnet in practice? Proof size follows from
-  it and it has not been measured here.
+- Entry batches on mainnet were at most 61 KB in the four blocks measured,
+  12 to 15 per block, which puts the median proof at 19 KB. Is that a cap
+  leaders will keep? A proof could be much smaller if transactions were
+  length-prefixed or batches were Merkle trees.
 - Is fast leader handover active on mainnet, and how often do blocks switch
-  parent? That decides whether supporting those blocks is worth the extra
-  rules.
+  parent? None of the four blocks measured did. That decides whether
+  supporting those blocks is worth the extra rules.
 - Is there any other place where the verifier reads a block differently from
   a validator? The split header was one. Each such difference is a way to
   show a client bytes that never ran.

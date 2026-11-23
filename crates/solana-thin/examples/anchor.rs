@@ -3,7 +3,7 @@
 //!
 //! This is the pattern a local-first ledger needs from a chain. Nothing is
 //! "spent" on chain and no program state is read back. A device commits a
-//! fingerprint, and later anyone can check, offline, from a few kilobytes:
+//! fingerprint, and later anyone can check, offline, from a small proof:
 //!
 //! * **not after**: the fingerprint is in a finalized block, so it existed by
 //!   that block's time;

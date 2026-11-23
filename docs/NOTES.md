@@ -7,8 +7,8 @@ came from, what was tried and dropped, and what to do next.
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test`: 78 tests pass (35 unit, 21 attacks, 8 conformance, 8
-  end-to-end, 2 mainnet snapshot, 3 properties, 1 doctest). The attack suite
+- `cargo test`: 80 tests pass (35 unit, 21 attacks, 8 conformance, 8
+  end-to-end, 2 mainnet block, 2 mainnet snapshot, 3 properties, 1 doctest). The attack suite
   takes about 25 seconds; the rest is quick.
 - `cargo clippy --workspace --all-targets --features testkit -- -D warnings`
   is clean. `cargo doc` is clean.
@@ -36,7 +36,9 @@ came from, what was tried and dropped, and what to do next.
 | Works against several running validators | 709 block ids and 705 certificates (330 fast, 375 slow) from a four-validator `LocalCluster`, over 14 epochs | Strong for aggregation, both thresholds, skipped slots. Four signers, not hundreds |
 | The epoch-stake offset is right | On that cluster every certificate verifies with the set fetched one epoch earlier; 19 fail with the same-epoch set and 19 with the set from two epochs earlier | Strong |
 | Membership of the mainnet set is right | 664 `VATDebit` entries in the first block of epoch 1095 match 664 staked accounts with keys; 20 staked accounts with keys had none | Good. Not confirmed by a certificate |
-| A live mainnet certificate verifies | **Not tested.** No source for shreds or footers was reachable. The genesis certificate was tried and could not be checked; see below | None |
+| Block ids are right on mainnet | For 3 of 3 mainnet blocks, the id computed from shreds equals the id in the certificate the next leader put in its footer | Strong. Needs no validator set |
+| A live mainnet certificate verifies | 4 of 4 certificates from epoch 1095 verify against 666 validators; rejected without the admission filter, with the next epoch's set, and with another shred version | Strong for the signature and ranking. The stake values are Trillium's, rounded to 10^-5 SOL, so the threshold sum is approximate |
+| Mainnet transactions prove and verify | 1,048 of 1,048 in three blocks; 331 of them are a test | Strong for these blocks: Agave leaders, no parent switch |
 
 The Agave vectors use random keys, so regenerating them changes the bytes.
 The tests depend on structure, not on specific values.
@@ -72,6 +74,37 @@ All from `https://api.mainnet-beta.solana.com` on 2026-11-23.
   from all 684 staked accounts and was wrong.
 - Fetching twice in the same epoch, 18,000 slots apart, gave identical
   accounts. The hash is stable within an epoch.
+
+### Mainnet blocks over the repair protocol
+
+A throwaway client (not in the repo) spoke Agave's repair protocol to 24
+validators picked at random from `getClusterNodes`, with a fresh Ed25519 key
+and no stake.
+
+- All 24 sent a ping, accepted the pong, and served shreds. Nobody refused an
+  unstaked stranger.
+- Slots 473,100,910 to 473,100,913: 512, 512, 576 and 704 data shreds, each
+  slot complete in about half a second, no retries, 2,424 requests in all.
+- Wire format, hand-serialized: `u32` variant (8 `WindowIndex`, 9
+  `HighestWindowIndex`, 7 `Pong`), then signature, sender, recipient,
+  millisecond timestamp, `u32` nonce, slot, shred index. The signature covers
+  everything but itself. A reply is the shred followed by the nonce. The
+  first request to a peer earns a 132-byte ping; answer with
+  `sha256("SOLANA_PING_PONG" ‖ token)`, signed. `HighestWindowIndex` returns
+  the slot's last shred, which gives its length.
+- Each block had 331 to 442 transactions in 12 to 15 entry batches, the
+  largest 60 to 61 KB. Footers named `agave/4.4.0 … client:JitoLabs`. Every
+  footer carried a fast certificate for the slot before. No `UpdateParent`.
+- Proof sizes over the 1,048 transactions: minimum 3.2 KB, median 19 to
+  21 KB, 90th percentile 43 to 53 KB, maximum 64 KB.
+- The set for epoch 1095 was rebuilt after the fact: members from the 666
+  `VATDebit` rewards in slot 472,608,000, keys from the vote accounts, stake
+  from Trillium's epoch 1094 data. Five pairs of validators tie at Trillium's
+  precision; the certificates verified anyway.
+
+A second throwaway served proofs over HTTP from the local validator's shreds:
+300 of 300 fetched and verified, 0.13 ms to build one, 0.8 ms to verify one,
+5 MB of memory for 43 blocks.
 
 ### The genesis certificate, tried and not verified
 
@@ -246,10 +279,11 @@ tags, base-3 bitmaps, pre-migration blocks, Agave's master branch.
    differently.** The split header was one, and it was not found by any test
    written beforehand. Firedancer was not read at all.
 2. **Stale-set mode.** No sound bound is known. It may be better removed.
-3. **Whether fast leader handover is active on mainnet.** If it is common,
-   refusing those blocks will be a visible gap.
-4. **Batch sizes on mainnet.** Proof size depends on them. The 2.0 KB and
-   31.5 KB figures come from a test validator with light traffic.
+3. **Whether fast leader handover is active on mainnet.** Four blocks had no
+   parent switch, which says little. If it is common, refusing those blocks
+   will be a visible gap.
+4. **Blocks from other clients.** Every block checked came from an Agave
+   leader. About 170 of 3,768 nodes report a Firedancer version.
 5. **BLS key and node identity at the snapshot.** The fetch tool reads them
    live. `getVatActiveSetRankMap`, when it ships, removes the guess.
 6. **The 2^80 leader collision attack** is my own analysis of the 20-byte
@@ -309,22 +343,17 @@ the same as none existing.
 
 ## Next steps, in order
 
-1. **Get one real mainnet block and certificate.** The set for epoch 1096 is
-   already in `tests/vectors/mainnet-vote-accounts.json` (fetched in epoch
-   1095). What is missing is a slot's data shreds from epoch 1096 and the
-   footer that certifies it. Routes, cheapest first: ask an RPC provider or a
-   validator operator to run `ledger-dump` on one slot; fetch the shreds over
-   the repair protocol from the `serveRepair` addresses in `getClusterNodes`;
-   subscribe to a shred stream. This settles items 3 to 5 in "least sure of",
-   and it is the result a Solana engineer will ask for first.
-
-   On the repair route: v4.4.1's `core/src/repair/serve_repair.rs` answers
-   unstaked requesters (after a ping), dropping them first under load. It
-   also has `ParentAndFecSetCount` and `FecSetRoot` requests keyed by block
-   id, which return the same Merkle openings this crate's proofs carry. So
-   validators already serve most of a proof to each other. Not tried.
+1. **Build the prover node.** The two throwaways above are its halves: fetch
+   named slots over repair, index them, serve `GET /proof/<signature>`. Open
+   points: how long validators keep a slot before pruning it, how they treat
+   an unstaked client that asks for much more than four slots, and where the
+   signature-to-slot lookup comes from (RPC `getTransaction` is enough, as an
+   untrusted hint).
 2. **Save `getVoteAccounts` every epoch.** A cron job running
-   `tools/fetch_vote_accounts.py`. Without it, step 1 has a one-epoch window.
+   `tools/fetch_vote_accounts.py`. The mainnet test had to borrow rounded
+   stake from a third party because nobody had saved epoch 1094's. Repeat the
+   mainnet check in epoch 1096 against the committed set, whose stake is
+   exact.
 3. **Build the split-header block on a real validator.** The fix follows
    Agave's source, but the attack was only run against this crate. Shredding
    such a block with Agave's `Shredder` and replaying it would show whether
@@ -332,11 +361,10 @@ the same as none existing.
 4. **Outside review.** Post to the Solana developer forum and ask Anza or
    Firedancer engineers to check the certificate and block id handling. The
    three protocol asks in `DESIGN.md` are a natural thread.
-5. **Support UpdateParent blocks** if step 1 shows they are common.
-6. **Measure and shrink proofs** once real batch sizes are known.
-7. **A prover that runs somewhere.** The library needs a host with shreds: a
-   Geyser plugin or a sidecar reading a node's ledger, serving
-   `getTransactionProof` over HTTP.
+5. **Support UpdateParent blocks** if a wider sample of mainnet shows them.
+6. **Shrink proofs.** The median is 19 KB because a proof carries the batch
+   in front of its transaction. Nothing in the crate can fix that; a protocol
+   change could (see `DESIGN.md`, open questions).
 
 ## Where to share, once reviewed
 

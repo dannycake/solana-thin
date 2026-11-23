@@ -1,8 +1,8 @@
 //! A thin client for Solana after Alpenglow.
 //!
-//! Given a few kilobytes of proof from any untrusted source, this crate tells
-//! you whether a transaction is in a block that Solana's validators finalized.
-//! It does not run a node, replay blocks, or trust the server it talks to.
+//! Given a proof from any untrusted source, this crate tells you whether a
+//! transaction is in a block that Solana's validators finalized. It does not
+//! run a node, replay blocks, or trust the server it talks to.
 //!
 //! ```
 //! # use solana_thin::testkit::*;

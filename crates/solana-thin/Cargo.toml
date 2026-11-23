@@ -1,6 +1,6 @@
 [package]
 name = "solana-thin"
-description = "A thin client for Solana after Alpenglow: verify that a block is final and that your transaction is in it, from a few kilobytes of proof."
+description = "A thin client for Solana after Alpenglow: verify that a block is final and that your transaction is in it, from a small proof."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
