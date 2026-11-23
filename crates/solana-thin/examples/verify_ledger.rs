@@ -16,10 +16,14 @@
 //!     dump.jsonl vote-accounts.json <shred version> [signature ...]
 //! ```
 //!
-//! Signatures are base58, as the `solana` CLI prints them. Set `HOPS=n` to
-//! prove each transaction from a certificate `n` certified blocks later than
-//! the nearest one, which exercises the ancestry chain. See
-//! `docs/LOCAL-VALIDATOR.md` for the full procedure.
+//! Signatures are base58, as the `solana` CLI prints them. Environment:
+//!
+//! * `ALL=1` proves every transaction in the dump instead of named ones.
+//! * `HOPS=n` proves each transaction from a certificate `n` certified blocks
+//!   later than the nearest one, which exercises the ancestry chain.
+//! * `SLOTS_PER_EPOCH=n` for clusters whose epochs are not 432,000 slots.
+//!
+//! See `docs/LOCAL-VALIDATOR.md` for the full procedure.
 
 use serde_json::Value;
 use solana_thin::prover::{self, BlockData};
@@ -126,25 +130,62 @@ fn main() -> ExitCode {
     println!("block ids: {ids_equal} of {ids_compared} equal to the validator's");
 
     // ---- 2. Certificates: every footer certificate against the vote accounts.
-    let accounts = vote_accounts(&args[2]);
-    let set = ValidatorSet::from_vote_accounts(&accounts).expect("validator set");
-    println!(
-        "validator set: {} ranked of {} vote accounts, hash {}",
-        set.len(),
-        accounts.len(),
-        hex::encode(set.hash())
-    );
-    let params = ClusterParams::mainnet(shred_version);
-    let mut client = ThinClient::new(params);
-    let pinned = set.hash();
+    let mut params = ClusterParams::mainnet(shred_version);
+    if let Some(slots) = std::env::var("SLOTS_PER_EPOCH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        params.slots_per_epoch = slots;
+    }
     let mut epochs: Vec<u64> = blocks
         .keys()
         .map(|slot| params.epoch_of(*slot).unwrap())
         .collect();
     epochs.dedup();
-    for epoch in &epochs {
+
+    // Which set goes with which epoch. A single file is used for every epoch.
+    // A directory holds one `vote-accounts-epoch-<E>.json` per epoch it was
+    // fetched in, and the set fetched in epoch E is pinned for epoch
+    // E + SET_OFFSET. The protocol's answer is 1: certificates in an epoch
+    // are checked against stake as it stood one epoch earlier.
+    let offset: u64 = std::env::var("SET_OFFSET")
+        .ok()
+        .and_then(|o| o.parse().ok())
+        .unwrap_or(1);
+    let load = |path: &str| {
+        let accounts = vote_accounts(path);
+        ValidatorSet::from_vote_accounts(&accounts).expect("validator set")
+    };
+    let mut pins: Vec<(u64, ValidatorSet)> = Vec::new();
+    if std::path::Path::new(&args[2]).is_dir() {
+        for epoch in &epochs {
+            let fetched_in = epoch.saturating_sub(offset);
+            let path = format!("{}/vote-accounts-epoch-{fetched_in}.json", args[2]);
+            if std::path::Path::new(&path).exists() {
+                pins.push((*epoch, load(&path)));
+            } else {
+                println!("epoch {epoch}: no set fetched in epoch {fetched_in}");
+            }
+        }
+        let distinct: std::collections::BTreeSet<_> = pins.iter().map(|(_, s)| s.hash()).collect();
+        println!(
+            "validator sets: {} epochs pinned, each from the set fetched {offset} epoch(s) earlier, {} distinct",
+            pins.len(),
+            distinct.len()
+        );
+    } else {
+        let set = load(&args[2]);
+        println!(
+            "validator set: {} ranked, hash {}",
+            set.len(),
+            hex::encode(set.hash())
+        );
+        pins.extend(epochs.iter().map(|epoch| (*epoch, set.clone())));
+    }
+    let mut client = ThinClient::new(params);
+    for (epoch, set) in &pins {
         client
-            .trust_validator_set(*epoch, set.clone(), &pinned)
+            .trust_validator_set(*epoch, set.clone(), &set.hash())
             .unwrap();
     }
 
@@ -195,11 +236,13 @@ fn main() -> ExitCode {
 
     // A certificate signed for another cluster must not verify here.
     if let Some(cert) = certs.values().next() {
-        let other = ThinClient::new(ClusterParams::mainnet(shred_version.wrapping_add(1)));
-        let mut other = other;
-        for epoch in &epochs {
+        let mut other = ThinClient::new(ClusterParams {
+            shred_version: shred_version.wrapping_add(1),
+            ..params
+        });
+        for (epoch, set) in &pins {
             other
-                .trust_validator_set(*epoch, set.clone(), &pinned)
+                .trust_validator_set(*epoch, set.clone(), &set.hash())
                 .unwrap();
         }
         match other.verify_finality(cert) {
@@ -219,13 +262,27 @@ fn main() -> ExitCode {
         .and_then(|h| h.parse().ok())
         .unwrap_or(0);
     let (mut proven, mut smallest, mut largest) = (0usize, usize::MAX, 0usize);
+    let mut targets: Vec<(String, [u8; 64])> = Vec::new();
     for text in &args[4..] {
-        let Some(signature) = base58_signature(text) else {
-            println!("{text}: not a base58 signature");
-            failed = true;
-            continue;
-        };
-        let short = &text[..text.len().min(12)];
+        match base58_signature(text) {
+            Some(signature) => targets.push((text[..text.len().min(12)].to_string(), signature)),
+            None => {
+                println!("{text}: not a base58 signature");
+                failed = true;
+            }
+        }
+    }
+    if std::env::var("ALL").is_ok() {
+        for block in blocks.values() {
+            for signature in block.signatures() {
+                targets.push((hex::encode(&signature[..6]), signature));
+            }
+        }
+    }
+    let quiet = targets.len() > 16;
+    let (mut by_fast, mut by_slow, mut max_hops) = (0usize, 0usize, 0usize);
+    for (short, signature) in &targets {
+        let signature = *signature;
         let Some((&slot, _)) = blocks
             .iter()
             .find(|(_, block)| block.signatures().contains(&signature))
@@ -265,7 +322,12 @@ fn main() -> ExitCode {
                 proven += 1;
                 smallest = smallest.min(size);
                 largest = largest.max(size);
-                if args.len() > 4 + 16 {
+                match verified.finalized_by.finality {
+                    Finality::Fast => by_fast += 1,
+                    Finality::Slow => by_slow += 1,
+                }
+                max_hops = max_hops.max(chain.len() - 1);
+                if quiet {
                     continue;
                 }
                 let memo = verified
@@ -292,8 +354,8 @@ fn main() -> ExitCode {
 
     if proven > 0 {
         println!(
-            "transactions: {proven} of {} proven and verified, proofs {smallest} to {largest} bytes",
-            args.len() - 4
+            "transactions: {proven} of {} proven and verified ({by_fast} under a fast certificate, {by_slow} under a slow one, up to {max_hops} hops), proofs {smallest} to {largest} bytes",
+            targets.len()
         );
     }
     if failed {

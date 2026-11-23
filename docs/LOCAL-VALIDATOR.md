@@ -1,13 +1,15 @@
-# Testing against a running validator
+# Testing against running validators
 
-The conformance vectors compare this crate with Agave's libraries. This
-procedure compares it with a validator that is actually running: blocks it
-produced, certificates it signed, transactions it accepted over RPC.
+The conformance vectors compare this crate with Agave's libraries. These two
+procedures compare it with validators that are actually running: blocks they
+produced, certificates they signed, transactions they accepted over RPC.
 
-## What was run (2026-11-23)
+Both were run on 2026-11-23 with Agave v4.4.1 on Linux x86-64.
 
-Agave v4.4.1 release binaries, `solana-test-validator --alpenglow`, on Linux
-x86-64. One validator, shred version 56225, 400 ms slots.
+## One validator
+
+Release binaries, `solana-test-validator --alpenglow`. Shred version 56225,
+400 ms slots.
 
 | Check | Result |
 |---|---|
@@ -25,20 +27,60 @@ One bug was found this way: the CLI writes `--with-memo` to Memo version 4
 (`Memo4c2pN8afCj432Lb7RMVKi9PbQnnW7ewFFaV3oAH`), which
 `Transaction::memos` did not recognise. Fixed, with a test.
 
-## What this does not show
+A test validator holds all the stake, so every certificate has one signature,
+every block finalizes fast, and its 432,000-slot epoch never turns over. The
+next run covers those.
 
-- **More than one signer.** A test validator holds all the stake, so every
-  certificate has one signature and the 80% and 60% thresholds are met
-  trivially. Aggregation over many keys and the thresholds are covered by the
-  Agave vectors (13 certificates), not by this run.
-- **Slow finalization.** With one validator every block finalizes fast. No
-  slow certificate was produced.
-- **An epoch boundary.** The test validator's epoch is 432,000 slots, so the
-  rule for which epoch's stake applies was not exercised.
-- **A leader switching parent** (`UpdateParent`), and skipped slots.
+## Four validators
+
+`cluster-run` (in `tools/agave-fixtures`) starts Agave's own `LocalCluster`:
+four full validators in one process, voting over loopback, with 40, 30, 20
+and 10% of stake and 64-slot epochs. After three epochs it stops the 30%
+validator. The remaining 70% is enough to finalize but not fast, and the
+stopped validator's leader slots are skipped. It saves `getVoteAccounts` once
+per epoch, because stake moves at every boundary: validators that vote earn
+rewards and the stopped one does not.
+
+| Check | Result |
+|---|---|
+| Block ids equal the validator's | 709 of 709 |
+| Footer certificates verify, each against the set fetched one epoch before its slot | 705 of 705: 330 fast, 375 slow, over 14 epochs and 10 distinct sets |
+| The same with the set fetched in the certificate's own epoch | 19 rejected |
+| The same with the set fetched two epochs before | 19 rejected |
+| Transactions proven and verified | 7 of 7: 4 under fast certificates, 3 under slow |
+| The same from a certificate four certified blocks later | 7 of 7, up to 5 hops |
+| Blocks whose parent is not the previous slot | 28, all indexed and chained through |
+
+The rejected certificates in the two wrong-offset rows fail on stake, not on
+the signature. With the same-epoch set, fast certificates signed by the 40, 30
+and 10% validators come to 79.99%. With the set from two epochs before, slow
+certificates signed by the 40 and 20% validators come to 59.98%. By the right
+epoch's numbers both clear their threshold. That is the rule in
+`docs/DESIGN.md` for which epoch's stake applies, observed rather than read.
+
+```sh
+cd tools/agave-fixtures
+cargo run --release --bin cluster-run -- ../../cluster        # about 6 minutes
+cargo run --release --bin ledger-dump -- ../../cluster/ledger 1 100000 ../../cluster/dump.jsonl
+cd ../..
+ALL=1 SLOTS_PER_EPOCH=64 cargo run --release --example verify_ledger -- \
+  cluster/dump.jsonl cluster <shred version from cluster/cluster.json>
+```
+
+Given a directory, `verify_ledger` pins the set from
+`vote-accounts-epoch-<E>.json` for epoch `E + 1`. `SET_OFFSET=0` or `2` shows
+the other two rows.
+
+## What neither run shows
+
+- **A leader switching parent** (`UpdateParent`). Fast leader handover was
+  not exercised.
+- **Validator admission.** Every validator here could pay its admission
+  ticket, so the filter in `docs/DESIGN.md` removed nobody.
+- **Many validators.** Four signers, not hundreds.
 - **Mainnet.** See the README.
 
-## Reproducing it
+## Reproducing the one-validator run
 
 Needs the Agave v4.4.1 release (`solana-release-x86_64-unknown-linux-gnu.tar.bz2`
 from the Agave releases page) on `PATH`, and the fixture tool built as
