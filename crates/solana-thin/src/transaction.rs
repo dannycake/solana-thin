@@ -13,16 +13,26 @@
 use crate::error::{Error, Result};
 use crate::wire::Reader;
 
-/// SPL Memo program, `MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`.
+/// SPL Memo version 3, `MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`.
 pub const MEMO_PROGRAM_ID: [u8; 32] = [
     5, 74, 83, 90, 153, 41, 33, 6, 77, 36, 232, 113, 96, 218, 56, 124, 124, 53, 181, 221, 188, 146,
     187, 129, 228, 31, 168, 64, 65, 5, 68, 141,
+];
+/// SPL Memo version 4, `Memo4c2pN8afCj432Lb7RMVKi9PbQnnW7ewFFaV3oAH`. The
+/// `solana` CLI of Agave 4.4 writes `--with-memo` to this one.
+pub const MEMO_V4_PROGRAM_ID: [u8; 32] = [
+    5, 74, 83, 82, 40, 84, 205, 209, 3, 204, 46, 70, 49, 163, 245, 23, 146, 172, 114, 124, 241,
+    229, 10, 188, 151, 130, 138, 197, 153, 79, 60, 194,
 ];
 /// The first Memo program, `Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo`.
 pub const MEMO_V1_PROGRAM_ID: [u8; 32] = [
     5, 74, 83, 80, 248, 93, 200, 130, 214, 20, 165, 86, 114, 120, 138, 41, 109, 223, 30, 171, 171,
     208, 166, 6, 120, 136, 73, 50, 244, 238, 246, 160,
 ];
+
+/// Every Memo program a validator ships: versions 1, 3 and 4.
+pub const MEMO_PROGRAM_IDS: [[u8; 32]; 3] =
+    [MEMO_PROGRAM_ID, MEMO_V1_PROGRAM_ID, MEMO_V4_PROGRAM_ID];
 
 /// Which message encoding a transaction uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +104,8 @@ impl Transaction {
     pub fn memos(&self) -> impl Iterator<Item = &[u8]> {
         self.instructions.iter().filter_map(move |ix| {
             let program = self.program_id(ix)?;
-            (program == &MEMO_PROGRAM_ID || program == &MEMO_V1_PROGRAM_ID)
+            MEMO_PROGRAM_IDS
+                .contains(program)
                 .then_some(ix.data.as_slice())
         })
     }
@@ -278,6 +289,24 @@ mod tests {
             long.push(0);
             assert_eq!(Transaction::parse(&long), Err(Error::TrailingBytes));
         }
+    }
+
+    #[test]
+    fn every_memo_program_is_recognised_and_nothing_else() {
+        let bytes = legacy_transaction(4, &[b"anchor"]);
+        let at = bytes
+            .windows(32)
+            .position(|w| w == MEMO_PROGRAM_ID)
+            .unwrap();
+        for program in MEMO_PROGRAM_IDS {
+            let mut tx = bytes.clone();
+            tx[at..at + 32].copy_from_slice(&program);
+            let tx = Transaction::parse(&tx).unwrap();
+            assert_eq!(tx.memos().collect::<Vec<_>>(), [b"anchor"]);
+        }
+        let mut other = bytes.clone();
+        other[at + 31] ^= 1;
+        assert_eq!(Transaction::parse(&other).unwrap().memos().count(), 0);
     }
 
     #[test]
