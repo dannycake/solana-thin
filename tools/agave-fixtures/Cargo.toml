@@ -1,0 +1,42 @@
+# Generates conformance vectors for solana-thin using Agave's own code.
+#
+# This crate is deliberately NOT part of the solana-thin workspace: it links the
+# real validator (blockstore, shredder, consensus pool types) and takes a long
+# time to build. Its only output is ../../crates/solana-thin/tests/vectors/*.
+#
+# Setup: clone https://github.com/anza-xyz/agave at tag v4.4.1 into ../agave (i.e. tools/agave)
+[package]
+name = "agave-fixtures"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+agave-bls-cert-verify = { path = "../agave/bls-cert-verify", features = ["agave-unstable-api", "dev-context-only-utils"] }
+agave-votor-messages = { path = "../agave/votor-messages", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-entry = { path = "../agave/entry", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-ledger = { path = "../agave/ledger", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-runtime = { path = "../agave/runtime", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-vote = { path = "../agave/vote", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-bls-signatures = "*"
+solana-signer-store = "*"
+solana-hash = "*"
+solana-keypair = "*"
+solana-signer = "*"
+solana-pubkey = "*"
+solana-transaction = "*"
+solana-message = "*"
+solana-system-interface = "*"
+solana-sha256-hasher = "*"
+wincode = "*"
+bitvec = "*"
+hex = "*"
+serde_json = "*"
+
+[patch.crates-io]
+blstrs = { git = "https://github.com/anza-xyz/blstrs", rev = "a1faffa3420bdaf4102425c43f00cdd815d4f145" }
+crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "5ee1c6ec671d94db14ed9238eb99e59a84555aad" }
+librocksdb-sys = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
+rocksdb = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }

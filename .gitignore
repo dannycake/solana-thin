@@ -1,0 +1,5 @@
+target/
+tools/agave
+tools/agave-fixtures/target/
+*.swp
+.DS_Store

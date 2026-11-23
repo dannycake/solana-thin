@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/solana-thin"]
+# tools/agave-fixtures links the real validator and is built on its own.
+exclude = ["tools"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dannycake/solana-thin"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.test]
+opt-level = 2
