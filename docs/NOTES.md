@@ -7,8 +7,7 @@ and dropped, and what to do next.
 
 ## State of the repo
 
-- Branch `main`, three commits, pushed. No pull
-  request is open.
+- Branch `main`, pushed.
 - `cargo test`: 76 tests pass (34 unit, 20 attacks, 8 conformance, 8
   end-to-end, 2 mainnet snapshot, 3 properties, 1 doctest). The attack suite
   takes about 25 seconds; the rest is quick.
@@ -16,7 +15,7 @@ and dropped, and what to do next.
   is clean. `cargo doc` is clean.
 - Built with Rust 1.97. The crate declares `rust-version = "1.75"`, which was
   **not** tested on 1.75.
-- `.github/workflows/ci.yml` exists and has never run.
+- There is no CI. Run the three commands above before pushing.
 - Unaudited. Nobody but the author has read the code.
 
 ## What is verified, and how strongly
