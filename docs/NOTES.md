@@ -1,20 +1,20 @@
-# Session notes (2026-11-23)
+# Working notes (2026-11-23)
 
-Handoff notes from the session that built v0.1. `README.md` says what the
-crate does and `docs/DESIGN.md` says why each check exists. This file holds
-everything else: what was measured, where each fact came from, what was tried
-and dropped, and what to do next.
+`README.md` says what the crate does and `docs/DESIGN.md` says why each check
+exists. This file holds everything else: what was measured, where each fact
+came from, what was tried and dropped, and what to do next.
 
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test`: 76 tests pass (34 unit, 20 attacks, 8 conformance, 8
+- `cargo test`: 77 tests pass (35 unit, 20 attacks, 8 conformance, 8
   end-to-end, 2 mainnet snapshot, 3 properties, 1 doctest). The attack suite
   takes about 25 seconds; the rest is quick.
 - `cargo clippy --workspace --all-targets --features testkit -- -D warnings`
   is clean. `cargo doc` is clean.
-- Built with Rust 1.97. The crate declares `rust-version = "1.75"`, which was
-  **not** tested on 1.75.
+- `rust-version` is 1.85, and the tests pass on 1.85.0. It was declared as
+  1.75 and never built there: with the committed `Cargo.lock`, `blst` pulls in
+  `zeroize_derive` 1.5, which is an edition 2024 crate.
 - There is no CI. Run the three commands above before pushing.
 - Unaudited. Nobody but the author has read the code.
 
@@ -30,8 +30,8 @@ and dropped, and what to do next.
 | Transaction walking is right | 254 Agave-serialized transactions (248 legacy, 2 v0, 4 v1, 2 multi-signer) parse to the same message bytes and positions | Good; v0 and v1 samples are few |
 | Footer and header parsing is right | Parses footers Agave serialized, including fast and slow embedded certificates | Good |
 | Live mainnet keys load | All 684 BLS keys from public RPC in epoch 1095 decode and pass subgroup checks | Strong, but says nothing about certificates |
-| A live mainnet certificate verifies | **Not tested.** No source for certificates or shreds was reachable | None |
-| Works against a running validator | **Not tested.** See "Next steps" | None |
+| Works against a running validator | 447 block ids, 446 footer certificates and 312 transactions from `solana-test-validator` v4.4.1; see `docs/LOCAL-VALIDATOR.md` | Strong for formats and the pipeline. One signer, so it says nothing about aggregation or thresholds |
+| A live mainnet certificate verifies | **Not tested.** No source for shreds or footers was reachable. The genesis certificate was tried and could not be checked; see below | None |
 
 The Agave vectors use random keys, so regenerating them changes the bytes.
 The tests depend on structure, not on specific values.
@@ -60,6 +60,23 @@ All from `https://api.mainnet-beta.solana.com` on 2026-11-23.
   epoch-stake rule below this should be the set for epoch **1096**. That has
   not been confirmed against a certificate.
 
+### The genesis certificate, tried and not verified
+
+`getAgGenesisCert` returns a real certificate: 446 signers over slot
+459,652,999. Its payload is tag `0x06` with the same layout as a notarize
+vote. Checking it needs the ranked set of epoch 1064, which is stake as it
+stood in epoch 1063, exact to the lamport, because one wrong rank changes the
+aggregate key. Public RPC only reports current stake. Trillium's per-epoch
+API (`api.trillium.so/validator_rewards/1063`) has every validator's BLS key
+but rounds stake to 10^-5 SOL, has ties at that precision, and one record
+with unreadable keys. A set rebuilt from it puts 82.15% of stake behind the
+bitmap, which is the right neighbourhood for a genesis certificate, but the
+signature does not verify, with or without a gap for the unreadable record.
+So this is not evidence either way about the crate.
+
+The lesson: fetch and keep `getVoteAccounts` every epoch from now on.
+A certificate can only be checked against a set that was saved in time.
+
 RPC methods that do **not** help:
 
 - `getBlock` on 4.4.0 returns no block id, footer or certificate.
@@ -68,6 +85,11 @@ RPC methods that do **not** help:
   `tools/fetch_vote_accounts.py`.
 - No RPC method on either branch returns a finality certificate other than the
   genesis one.
+
+Geyser does: the Solana Foundation's Alpenglow page says footer certificates
+reach plugins through a `notify_block_footer` callback, and that Yellowstone
+gRPC does not forward them yet. That gives a node operator certificates but
+not shreds. Not tried here.
 
 ## Where each format was read from
 
@@ -199,13 +221,19 @@ These are easy to get wrong and are not all spelled out in `DESIGN.md`.
   checking before claiming nobody else is working on this.
 
 "Abandoned" is my reading of the dates. None of these repos says so itself.
-I could not see earlier chats from this session, so projects named there may
-be missing.
+
+Guppy, from its abstract and excerpts only: an untrusted off-chain service
+keeps a Merkle tree over chain state and proves each new root with recursive
+zero-knowledge proofs, for chains whose validators do not commit to state. It
+is about state, which this crate cannot prove, and it needs a proving
+service. It is complementary, not the same thing. A web search for an
+Alpenglow light client or inclusion-proof library found none, which is not
+the same as none existing.
 
 ## Environment gotchas
 
-- `tools/agave` is gitignored. In the session it was a symlink to a checkout
-  of Agave v4.4.1. On a new machine:
+- `tools/agave` is gitignored. It can be a symlink to a checkout of Agave
+  v4.4.1. On a new machine:
   `git clone --depth 1 --branch v4.4.1 https://github.com/anza-xyz/agave tools/agave`
 - `tools/agave-fixtures` pins Rust 1.98.1 through its own
   `rust-toolchain.toml`, because Agave does. It copies Agave's `Cargo.lock` and
@@ -218,33 +246,36 @@ be missing.
   `workspace.package.edition`.
 - A build piped through `tail` reports the exit code of `tail`. The first
   fixture build looked successful and was not.
-- In the cloud session, running the downloaded Agave release binaries was
-  blocked by the permission system. That is why the local-validator test was
-  not done.
+- `solana-test-validator` needs `--alpenglow` to start with Alpenglow active
+  on v4.4.1. Its epoch is 432,000 slots, so a short run never crosses one.
+- The `solana` CLI of v4.4.1 writes `--with-memo` to Memo version 4.
+- `ledger-dump` opens the ledger read-only, so it runs beside the validator.
+  Dump a few slots behind the tip: the newest slots may not be full yet.
 
 ## Next steps, in order
 
-1. **Local validator test.** Run `solana-test-validator` (Agave v4.4.x), send a
-   few Memo transactions, stop it. Write a small tool (extend
-   `tools/agave-fixtures`, which already links `Blockstore`) that opens the
-   ledger directory and dumps, per slot, the data shred payloads. Feed them to
-   `BlockData::from_shreds`, take a certificate from a later block's footer,
-   build the validator set from the test validator's vote account, and run
-   `prover::prove` then `ThinClient::verify_signature`. Things to watch for:
-   - whether the test validator on 4.4.x starts with Alpenglow active (the
-     changelog on master says it does by default; not checked for 4.4.x);
-   - its shred version, which will not be 50093;
-   - its epoch length, which is short by default, so the stake offset rule
-     will be exercised quickly.
-2. **Get one real mainnet certificate and block.** Any of: an RPC provider
-   with a Geyser plugin, ledger access through `agave-ledger-tool`, or a shred
-   stream. One block's data shreds plus one footer certificate is enough to
-   settle items 2 to 5 in "least sure of".
-3. **Outside review.** Post to the Solana developer forum and ask Anza or
+1. **Get one real mainnet block and certificate.** The set for epoch 1096 is
+   already in `tests/vectors/mainnet-vote-accounts.json` (fetched in epoch
+   1095). What is missing is a slot's data shreds from epoch 1096 and the
+   footer that certifies it. Routes, cheapest first: ask an RPC provider or a
+   validator operator to run `ledger-dump` on one slot; fetch the shreds over
+   the repair protocol from the `serveRepair` addresses in `getClusterNodes`;
+   subscribe to a shred stream. This settles items 2 to 5 in "least sure of",
+   and it is the result a Solana engineer will ask for first.
+2. **Save `getVoteAccounts` every epoch.** A cron job running
+   `tools/fetch_vote_accounts.py`. Without it, step 1 has a one-epoch window.
+3. **A local cluster of several validators.** `solana-test-validator` has one
+   signer. Agave's `multinode-demo` scripts (built from source) would give
+   many-signer certificates, slow finalization and skipped slots from running
+   validators, and a short epoch to exercise the stake offset rule.
+4. **Outside review.** Post to the Solana developer forum and ask Anza or
    Firedancer engineers to check the certificate and block id handling. The
    three protocol asks in `DESIGN.md` are a natural thread.
-4. **Support UpdateParent blocks** if step 2 shows they are common.
-5. **Measure and shrink proofs** once real batch sizes are known.
+5. **Support UpdateParent blocks** if step 1 shows they are common.
+6. **Measure and shrink proofs** once real batch sizes are known.
+7. **A prover that runs somewhere.** The library needs a host with shreds: a
+   Geyser plugin or a sidecar reading a node's ledger, serving
+   `getTransactionProof` over HTTP.
 
 ## Where to share, once reviewed
 
