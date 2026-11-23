@@ -235,6 +235,7 @@ crates/solana-thin/src
 tools/agave-fixtures     generates conformance vectors with Agave itself
 tools/fetch_vote_accounts.py   builds a validator set from any RPC node
 docs/DESIGN.md           formats, threat model, open problems
+docs/NOTES.md            session notes: evidence, sources, decisions, next steps
 ```
 
 ## License
