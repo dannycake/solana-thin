@@ -26,18 +26,18 @@ meant to be shown by cases in the differential oracle
 
 - **`votes-follow-replay`** (26 rows). Validators vote for a block only after replaying it without error, and at most 20% of stake is Byzantine. So a block that dies in replay, or is never replayed, is never finalized.
   This is the trust assumption, not something the oracle can show. The oracle shows the other half: that Agave marks the slot dead.
-  Oracle cases: none yet.
+  Oracle cases: `markers/footer-before-entries`, `markers/header-after-entries`, `markers/header-wrong-id`, `markers/header-zero-id-on-main`, `markers/no-alpentick`, `markers/no-footer`, `markers/no-header`, `markers/second-footer`, `markers/second-header`, `markers/zero-entry-batch`
 - **`dropped-shreds-never-complete`** (8 rows). A shred that the fetch filter or sanitize drops is never inserted, whether it arrived by turbine, by repair, or out of erasure recovery. A block that needs it never becomes full.
-  Oracle cases: none yet.
+  Oracle cases: `premise/dropped-shreds-never-complete/data-complete-mid-set`, `premise/dropped-shreds-never-complete/flags-0x80-without-0x40`, `premise/dropped-shreds-never-complete/last-in-slot-misaligned`, `premise/dropped-shreds-never-complete/parent-offset-zero`, `premise/dropped-shreds-never-complete/size-above-capacity`, `premise/dropped-shreds-never-complete/size-below-headers`
 - **`replay-from-zero`** (0 rows). With no UpdateParent, replay reads every shred from index 0.
-  Oracle cases: none yet.
+  Oracle cases: `premise/replay-from-zero`
 - **`component-parse-kills`** (4 rows). If any one component fails to parse, the slot dies.
-  Oracle cases: none yet.
+  Oracle cases: `premise/component-parse-kills/entry-count-too-high`, `premise/component-parse-kills/truncated-transaction`, `premise/component-parse-kills/unknown-marker-kind`
 - **`every-batch-executed`** (4 rows). Every entry batch is executed. Nothing may follow the boundary tick.
-  Oracle cases: none yet.
+  Oracle cases: `premise/every-batch-executed/batch-after-final-tick`, `premise/every-batch-executed/batch-after-footer`, `premise/every-batch-executed/second-batch`, `premise/every-batch-executed/second-tick-after-alpentick`, `premise/every-batch-executed/second-tick-before-footer`
 - **`every-transaction-commits-or-kills`** (11 rows). Every transaction in an executed batch is committed or kills the block. None is silently skipped.
   Committed has three shapes; see rows 105 to 107.
-  Oracle cases: none yet.
+  Oracle cases: `premise/every-transaction-commits-or-kills/bad-signature`, `premise/every-transaction-commits-or-kills/duplicate`, `premise/every-transaction-commits-or-kills/instruction-failure`, `premise/every-transaction-commits-or-kills/unknown-blockhash`
 
 ## Shred ingest
 

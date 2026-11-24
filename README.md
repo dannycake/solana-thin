@@ -194,7 +194,24 @@ as side effects of its consensus design. This crate uses them as they are.
 
 ## Tests
 
-`cargo test --all-features` runs 94 tests in about half a minute.
+`cargo test --all-features` runs 96 tests in about half a minute.
+
+- **A differential oracle** ([tools/agave-fixtures](tools/agave-fixtures),
+  `diff-fuzz`), run nightly, not by `cargo test`. It builds blocks, cuts
+  them into shreds in arbitrary layouts, and has Agave's own shred filter,
+  blockstore and replay decide what it would vote for and which transactions
+  it executed. Then it offers the verifier every claim a proof could make
+  about the same shreds, from a prover that checks nothing. Whatever the
+  verifier accepts, Agave must have executed, byte for byte; the block id
+  and parent must be Agave's. 130 named cases and seeded random ones, with
+  fast leader handover on and off. It found the zero-parent hole on its own,
+  and finds the split header when that fix is removed. 95 of its cases are
+  frozen under `tests/vectors/oracle` and replayed by `cargo test` with no
+  Agave present.
+- **Fuzzing** (`fuzz/`, `scripts/fuzz.sh`), nightly. Six targets; two hold
+  the transaction parser to the validator's own (`agave-transaction-view`,
+  and `solana-transaction` under `wincode`): whenever they accept bytes,
+  this crate reads the same bytes to the same length.
 
 - **The check ledger** ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)). The 128
   checks an Agave validator applies between a shred arriving and a
@@ -290,10 +307,13 @@ crates/solana-thin/src
   transaction.rs    legacy, v0 and v1 wire formats
   proof.rs          TxProof and its encoding
   prover.rs         building proofs from data shreds
-tools/agave-fixtures     generates conformance vectors with Agave itself;
-                         `ledger-dump` reads shreds out of a ledger directory
+tools/agave-fixtures     everything that links Agave: conformance vectors,
+                         the differential oracle (`diff-fuzz`), `ledger-dump`,
+                         `cluster-run`
 tools/shred-fixtures     runs the public shred conformance fixtures
 tools/fetch_vote_accounts.py   builds a validator set from any RPC node
+fuzz/                    fuzz targets, two against the validator's parsers
+scripts/nightly.sh       the heavy checks: oracle, fuzzers, fixtures, tripwire
 scripts/tripwire.py      fails when Agave or mainnet moves under the ledger
 scripts/conformance.py   writes docs/CONFORMANCE.md from docs/conformance.toml
 docs/DESIGN.md           formats, threat model, open problems

@@ -360,10 +360,24 @@ pub struct Case {
     pub freeze: bool,
 }
 
+/// Not a violation by the verifier: Agave's own verdict on a block depends
+/// on the order its shreds arrive in. Reported, and not counted against a
+/// run, for the one shape where it is known and understood.
+///
+/// A block on a zero-id (genesis) parent that carries an UpdateParent naming
+/// the same parent. Inserted in order, the header is recorded first, reads as
+/// absent (`ParentInfo::from_slot_meta`, ledger/src/blockstore.rs:542-551),
+/// and the marker is accepted. If the marker's shred arrives before shred 0,
+/// the header is then compared with it, found equal, and the slot is marked
+/// dead (`UpdateParentMatchesBlockHeader`). So validators can disagree about
+/// whether such a block is valid. The verifier refuses every claim about it
+/// (`Error::ZeroParentId`). Any other order dependence is a P0 violation.
+pub const UPSTREAM_ORDER: &str = "agave-order";
+
 /// A broken property.
 #[derive(Debug, Clone)]
 pub struct Violation {
-    /// `P0`, `P1`, `P2`, `premise`, `oracle`.
+    /// `P0`, `P1`, `P2`, `premise`, `oracle`, or [`UPSTREAM_ORDER`].
     pub property: &'static str,
     /// What happened.
     pub detail: String,
@@ -887,8 +901,16 @@ impl World {
                 continue;
             }
             if voted {
+                let zero_parent_marker = |v: &Verdict| {
+                    v.meta.as_ref().is_some_and(|m| {
+                        m.has_update_parent
+                            && m.parent_slot == Some(0)
+                            && m.parent_block_id == Hash::default()
+                    })
+                };
+                let known = zero_parent_marker(&forward) || zero_parent_marker(other);
                 violations.push(Violation {
-                    property: "P0",
+                    property: if known { UPSTREAM_ORDER } else { "P0" },
                     detail: format!(
                         "verdict depends on arrival order: forward voted={} dead={} replay={:?} \
                          meta={:?}; {order} voted={} dead={} replay={:?} meta={:?}",

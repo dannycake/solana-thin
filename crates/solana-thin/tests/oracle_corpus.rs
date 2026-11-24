@@ -52,20 +52,15 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Cases in which the verifier is known to accept a claim Agave did not
-/// execute. They are frozen as found so the hole stays visible; the test
-/// fails if one is missing from this list, and also if one listed here has
-/// stopped failing, so the entry is removed with the fix.
+/// execute. A hole that is found and not yet fixed is frozen here as found,
+/// so it stays visible; the test fails if such a case is missing from this
+/// list, and also if one listed here has stopped failing, so the entry is
+/// removed with the fix.
 ///
-/// Both are finding C2: Agave's `ParentInfo::from_slot_meta` treats a header
-/// whose parent id is all zeros as no header, so a block on genesis can
-/// carry an UpdateParent naming the same `(0, zeros)` parent. Agave replays
-/// from the marker and never executes what is in front of it. The verifier
-/// sees a header equal to the tree's parent, concludes no switch happened,
-/// and accepts transactions (and a footer) from the abandoned prefix.
-const KNOWN_OPEN: &[&str] = &[
-    "known/c2-zero-parent-update-parent",
-    "known/c2-zero-parent-decoy-footer",
-];
+/// Empty now. It held the two zero-parent cases
+/// (`known/c2-zero-parent-update-parent`, `known/c2-zero-parent-decoy-footer`)
+/// until the verifier began refusing blocks whose parent id is all zeros.
+const KNOWN_OPEN: &[&str] = &[];
 
 struct Executed {
     component_start: u32,

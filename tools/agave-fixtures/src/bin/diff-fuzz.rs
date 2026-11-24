@@ -23,7 +23,7 @@
 use {
     agave_fixtures::{
         corpus::{Tally, check_floors, corpus, generate},
-        harness::{Case, Item, Outcome, World, freeze},
+        harness::{Case, Item, Outcome, UPSTREAM_ORDER, World, freeze},
         oracle::{
             AbandonedPrefix, FEC_SET, HonestBlock, HonestSpec, JudgeOptions, Oracle, OracleConfig,
             Replay, Verdict, set_layout, split_first,
@@ -875,9 +875,27 @@ fn agave_summary(outcome: &Outcome) -> String {
     text
 }
 
+/// Violations that count against a run: everything but the known upstream
+/// order dependence, which is Agave disagreeing with itself.
+fn against_the_verifier(outcome: &Outcome) -> usize {
+    outcome
+        .violations
+        .iter()
+        .filter(|v| v.property != UPSTREAM_ORDER)
+        .count()
+}
+
 fn violation_summary(outcome: &Outcome) -> String {
     let mut parts = Vec::new();
-    for property in ["P0", "P1", "P2", "premise", "opening", "oracle"] {
+    for property in [
+        "P0",
+        "P1",
+        "P2",
+        "premise",
+        "opening",
+        "oracle",
+        UPSTREAM_ORDER,
+    ] {
         match outcome.count(property) {
             0 => {}
             n => parts.push(format!("{property}x{n}")),
@@ -959,7 +977,7 @@ fn run_cases(
         tally.voted += usize::from(outcome.voted);
         tally.claims += outcome.claims.len();
         tally.accepted += outcome.accepted();
-        tally.violations += outcome.violations.len();
+        tally.violations += against_the_verifier(&outcome);
         meta_moved += usize::from(outcome.meta_moved);
         for (reason, n) in &outcome.coverage {
             *coverage.entry(reason.clone()).or_insert(0) += n;
@@ -1005,7 +1023,7 @@ fn run_cases(
             }
         }
         if !outcome.violations.is_empty() {
-            totals.violations += outcome.violations.len();
+            totals.violations += against_the_verifier(&outcome);
             // In a long run, the first few of a kind are shown in full.
             let mut printed_header = false;
             for violation in &outcome.violations {
@@ -1067,6 +1085,11 @@ fn run_cases(
     );
     let by_property =
         |property: &str| -> usize { outcomes.iter().map(|o| o.count(property)).sum::<usize>() };
+    println!(
+        "known upstream finding, not counted: Agave's verdict depended on arrival order in {} \
+         run(s) of a zero-parent UpdateParent block",
+        by_property(UPSTREAM_ORDER),
+    );
     println!(
         "violations by property: P0 {} P1 {} P2 {} premise {} opening {} oracle {}; cases whose \
          SlotMeta moved with arrival order without any order voting: {meta_moved}",

@@ -7,8 +7,8 @@ came from, what was tried and dropped, and what to do next.
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test --all-features`: 94 tests pass. Without `unsound-stale-set`,
-  88: the stale-set tests are not compiled.
+- `cargo test --all-features`: 96 tests pass. Without `unsound-stale-set`,
+  90: the stale-set tests are not compiled.
 - CI on GitHub runs fmt, clippy, the tests with and without all features, the
   same on Rust 1.85, docs, the example and `cargo deny` on every push.
 - A hardening plan is in progress: a check ledger (landed, see
@@ -270,6 +270,33 @@ finding was then checked against the source or the network before acting.
    stricter than this crate's. No length differs for anything it accepts.
 7. **A `u32` multiplication** in `BlockProof::verify` could overflow if a
    caller raised `Limits::max_fec_sets` past 2^27. Now checked.
+
+## What the oracle found (2026-11-24)
+
+`diff-fuzz` (see `tools/agave-fixtures/README.md`) runs Agave's own
+blockstore and replay beside the verifier.
+
+1. **A second soundness hole, fixed.** On a block whose parent is a
+   cluster's first block (parent id all zeros), Agave's blockstore reads the
+   header as absent, accepts an UpdateParent naming the same parent, and
+   replays from the marker. The verifier saw header and tree agree and
+   accepted a transaction, and a footer, from the abandoned prefix. It needs
+   fast leader handover, which is off on mainnet, and a zero-id parent, which
+   mainnet does not have. The verifier now refuses every such block
+   (`Error::ZeroParentId`). The oracle found this from a recipe, not a
+   special case, and finds the split header when that fix is taken out.
+2. **Agave disagrees with itself on those blocks.** If the marker's shred
+   arrives before shred 0, the same block is marked dead
+   (`UpdateParentMatchesBlockHeader`); in order, it is replayed. Worth
+   reporting upstream once it has been seen on running validators.
+3. **Seen by running, where it was only read before:** a header split over
+   two shreds leaves Agave with no parent id and the block is never replayed
+   unless an UpdateParent follows; an abandoned prefix is never executed; a
+   transaction that fails in its program leaves the block valid; each of the
+   ledger's premises (`docs/CONFORMANCE.md`) holds on a case built for it.
+4. **Not modelled:** the live replay stage (partial replay, restart on an
+   abandoned prefix), erasure recovery, more than one slot of ancestry, and
+   anything that is not this one Agave build.
 
 Confirmed to match, with file and line, by the same read: shred header
 offsets and capacities, the leaf and node hashing, the double-Merkle tree and

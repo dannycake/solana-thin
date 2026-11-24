@@ -15,7 +15,9 @@
 # Agave paths are relative to the Agave repository at tag v4.4.1. This file is
 # the source; docs/CONFORMANCE.md is generated from it by
 # scripts/conformance.py, and tests/conformance_ledger.rs checks that every
-# test and premise named here exists.
+# test, premise and oracle case named here exists. An oracle case is a block
+# built and judged by Agave's own code (tools/agave-fixtures, diff-fuzz) and
+# frozen under crates/solana-thin/tests/vectors/oracle/.
 
 agave_tag = "v4.4.1"
 
@@ -23,33 +25,33 @@ agave_tag = "v4.4.1"
 id = "votes-follow-replay"
 text = "Validators vote for a block only after replaying it without error, and at most 20% of stake is Byzantine. So a block that dies in replay, or is never replayed, is never finalized."
 note = "This is the trust assumption, not something the oracle can show. The oracle shows the other half: that Agave marks the slot dead."
-oracle_cases = []
+oracle_cases = ["markers/footer-before-entries", "markers/header-after-entries", "markers/header-wrong-id", "markers/header-zero-id-on-main", "markers/no-alpentick", "markers/no-footer", "markers/no-header", "markers/second-footer", "markers/second-header", "markers/zero-entry-batch"]
 
 [[premise]]
 id = "dropped-shreds-never-complete"
 text = "A shred that the fetch filter or sanitize drops is never inserted, whether it arrived by turbine, by repair, or out of erasure recovery. A block that needs it never becomes full."
-oracle_cases = []
+oracle_cases = ["premise/dropped-shreds-never-complete/data-complete-mid-set", "premise/dropped-shreds-never-complete/flags-0x80-without-0x40", "premise/dropped-shreds-never-complete/last-in-slot-misaligned", "premise/dropped-shreds-never-complete/parent-offset-zero", "premise/dropped-shreds-never-complete/size-above-capacity", "premise/dropped-shreds-never-complete/size-below-headers"]
 
 [[premise]]
 id = "replay-from-zero"
 text = "With no UpdateParent, replay reads every shred from index 0."
-oracle_cases = []
+oracle_cases = ["premise/replay-from-zero"]
 
 [[premise]]
 id = "component-parse-kills"
 text = "If any one component fails to parse, the slot dies."
-oracle_cases = []
+oracle_cases = ["premise/component-parse-kills/entry-count-too-high", "premise/component-parse-kills/truncated-transaction", "premise/component-parse-kills/unknown-marker-kind"]
 
 [[premise]]
 id = "every-batch-executed"
 text = "Every entry batch is executed. Nothing may follow the boundary tick."
-oracle_cases = []
+oracle_cases = ["premise/every-batch-executed/batch-after-final-tick", "premise/every-batch-executed/batch-after-footer", "premise/every-batch-executed/second-batch", "premise/every-batch-executed/second-tick-after-alpentick", "premise/every-batch-executed/second-tick-before-footer"]
 
 [[premise]]
 id = "every-transaction-commits-or-kills"
 text = "Every transaction in an executed batch is committed or kills the block. None is silently skipped."
 note = "Committed has three shapes; see rows 105 to 107."
-oracle_cases = []
+oracle_cases = ["premise/every-transaction-commits-or-kills/bad-signature", "premise/every-transaction-commits-or-kills/duplicate", "premise/every-transaction-commits-or-kills/instruction-failure", "premise/every-transaction-commits-or-kills/unknown-blockhash"]
 
 [[check]]
 id = 1

@@ -72,6 +72,22 @@ fn test_names() -> BTreeSet<String> {
     names
 }
 
+/// The `name` of every frozen oracle case.
+fn oracle_case_names() -> BTreeSet<String> {
+    let dir = repo().join("crates/solana-thin/tests/vectors/oracle");
+    let mut names = BTreeSet::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        names.insert(doc["name"].as_str().unwrap().to_string());
+    }
+    names
+}
+
 #[test]
 fn every_row_of_the_ledger_resolves() {
     let text = std::fs::read_to_string(repo().join("docs/conformance.toml")).unwrap();
@@ -122,6 +138,36 @@ fn every_row_of_the_ledger_resolves() {
             other => problems.push(format!("row {id}: unknown status `{other}`")),
         }
     }
+    // Every premise that a row leans on is shown by at least one case that
+    // Agave's own code judged, and every case named is in the frozen corpus.
+    let frozen = oracle_case_names();
+    let used: BTreeSet<&str> = tables
+        .iter()
+        .filter(|(kind, _)| kind == "check")
+        .filter_map(|(_, row)| row.get("premise").map(String::as_str))
+        .collect();
+    for (_, premise) in tables.iter().filter(|(kind, _)| kind == "premise") {
+        let id = &premise["id"];
+        let cases: Vec<&str> = premise["oracle_cases"]
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(", ")
+            .map(|c| c.trim_matches('"'))
+            .filter(|c| !c.is_empty())
+            .collect();
+        if cases.is_empty() && used.contains(id.as_str()) {
+            problems.push(format!(
+                "premise {id}: rows lean on it and no oracle case shows it"
+            ));
+        }
+        for case in cases {
+            if !frozen.contains(case) {
+                problems.push(format!(
+                    "premise {id}: no frozen oracle case named `{case}`"
+                ));
+            }
+        }
+    }
+
     let expected: Vec<u32> = (1..=ids.len() as u32).collect();
     assert_eq!(ids, expected, "row ids are not 1..n in order");
     assert!(problems.is_empty(), "{}", problems.join("\n"));
