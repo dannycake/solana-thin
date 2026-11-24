@@ -94,6 +94,7 @@ fn the_live_validator_set_builds_and_commits() {
     );
 }
 
+#[cfg(feature = "unsound-stale-set")]
 #[test]
 fn live_keys_work_as_a_candidate_list() {
     let (_, accounts) = accounts();

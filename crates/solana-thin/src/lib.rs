@@ -70,11 +70,13 @@ mod wire;
 
 pub use block::{Footer, TxPosition};
 pub use certificate::{Aggregate, BlockRef, Finality, FinalityCert};
-pub use client::{ClusterParams, FinalizedBlock, StalePolicy, ThinClient, VerifiedTransaction};
+#[cfg(feature = "unsound-stale-set")]
+pub use client::StalePolicy;
+pub use client::{ClusterParams, FinalizedBlock, ThinClient, VerifiedTransaction};
 pub use error::{Error, Result};
 pub use merkle::Hash;
-pub use proof::{BlockProof, FecSetProof, Limits, ParentLink, TxProof};
+pub use proof::{BlockProof, FecSetProof, Limits, ParentLink, TxProof, MAX_FEC_SETS_PER_SLOT};
 pub use transaction::Transaction;
-pub use validator_set::{
-    Candidate, CandidateSet, ProofOfPossession, Validator, ValidatorSet, VoteAccount,
-};
+#[cfg(feature = "unsound-stale-set")]
+pub use validator_set::{Candidate, CandidateSet};
+pub use validator_set::{ProofOfPossession, Validator, ValidatorSet, VoteAccount};

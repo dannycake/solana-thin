@@ -7,8 +7,12 @@ came from, what was tried and dropped, and what to do next.
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test`: 80 tests pass (35 unit, 21 attacks, 8 conformance, 8
-  end-to-end, 2 mainnet block, 2 mainnet snapshot, 3 properties, 1 doctest). The attack suite
+- `cargo test --all-features`: 82 tests pass (36 unit, 22 attacks, 8
+  conformance, 8 end-to-end, 2 mainnet block, 2 mainnet snapshot, 3
+  properties, 1 doctest). Without `unsound-stale-set`, 76: the stale-set
+  tests are not compiled.
+- A hardening plan is in progress. Its check ledger, oracle and fuzzers are
+  described in `docs/CONFORMANCE.md` as they land. The attack suite
   takes about 25 seconds; the rest is quick.
 - `cargo clippy --workspace --all-targets --features testkit -- -D warnings`
   is clean. `cargo doc` is clean.

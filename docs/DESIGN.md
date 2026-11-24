@@ -23,6 +23,16 @@ Everything else arrives as untrusted bytes. The security claim is:
 execution outcome, and it is subject to the inherited limit in
 [Merkle truncation](#merkle-truncation).
 
+"Executed" is a statement about that part of the block, not about the
+transaction. Validators processed every transaction in it, and each one
+either committed or would have made the block invalid. But "committed" has
+three shapes: the instructions ran (successfully or not, fee paid); the
+accounts could not be loaded (fee paid, nothing ran); or, where
+`relax_fee_payer_constraint` (SIMD-0290) is active, the fee payer could not
+pay and the transaction was recorded as a no-op (no fee, nothing ran).
+Honest leaders drop the last kind, but a block containing one is valid, so a
+proof of inclusion cannot rule it out.
+
 ## Finality certificates
 
 `votor-messages/src/wire.rs`, `bls-cert-verify/src/cert_verify.rs`,
@@ -113,8 +123,10 @@ this.
 
 ### Stale-set mode
 
-Off by default. With a `StalePolicy`, a certificate for epoch `E + j` can be
-checked against the set pinned for epoch `E`:
+Not compiled by default: it sits behind the Cargo feature
+`unsound-stale-set`, named for what it is. With a `StalePolicy`, a
+certificate for epoch `E + j` can be checked against the set pinned for epoch
+`E`:
 
 - The caller supplies a `CandidateSet`: the claimed key order for `E + j`. It
   is untrusted. Its order is checked by the signature itself, since the wrong

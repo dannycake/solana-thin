@@ -35,13 +35,25 @@ pub struct Footer {
     /// Hash of the bank after executing the block.
     pub bank_hash: Hash,
     /// The leader's clock when it produced the block, in nanoseconds since the
-    /// Unix epoch. Validators reject blocks whose clock is out of bounds
-    /// relative to the parent, so this is a checked value, not a free claim.
+    /// Unix epoch.
+    ///
+    /// Validators check it only against the parent block: later than the
+    /// parent's, and no more than twice the elapsed slot time ahead of it.
+    /// Nothing compares it with real time. One leader cannot move it far, but
+    /// a run of colluding leaders can push it forward at up to twice the real
+    /// rate. Use it as "not earlier than the parent's clock", and compare
+    /// with a clock of your own before relying on it as wall time.
     pub producer_time_nanos: u64,
     /// Free-form client identification written by the leader.
     pub user_agent: Vec<u8>,
-    /// A finality certificate for an earlier block, as embedded by the leader.
-    /// It is returned unverified: pass it to the client like any other.
+    /// A finality certificate, as embedded by the leader. It is returned
+    /// unverified: pass it to the client like any other.
+    ///
+    /// It says nothing about this block. Validators check its signatures and
+    /// stake and nothing else: the block it certifies need not be this
+    /// block's parent, an ancestor, or even an earlier slot. In practice it is
+    /// the leader's latest finalized block. Ancestry is shown by
+    /// [`ParentLink`](crate::ParentLink)s, never by a footer.
     pub finality: Option<FinalityCert>,
 }
 
@@ -109,8 +121,23 @@ pub fn parse_marker(data: &[u8]) -> Result<Marker> {
                 1 => Some(read_finality(&mut body)?),
                 _ => return Err(Error::InvalidComponent("footer option tag")),
             };
-            // Reward certificates follow. They pay validators and say nothing
-            // a light client relies on, so they are left unread.
+            // Reward certificates. They pay validators and say nothing a
+            // light client relies on, but they are read to the end, so that a
+            // footer is accepted only where a validator's exact-length parse
+            // accepts it.
+            if option_tag(&mut body)? {
+                body.u64()?;
+                body.bytes(96)?;
+                reward_bitmap(&mut body)?;
+            }
+            if option_tag(&mut body)? {
+                body.u64()?;
+                body.bytes(32)?;
+                body.bytes(96)?;
+                reward_bitmap(&mut body)?;
+            }
+            body.finish()
+                .map_err(|_| Error::InvalidComponent("footer length"))?;
             Ok(Marker::Footer(Box::new(Footer {
                 bank_hash,
                 producer_time_nanos,
@@ -121,6 +148,25 @@ pub fn parse_marker(data: &[u8]) -> Result<Marker> {
         MARKER_GENESIS_CERTIFICATE => Ok(Marker::GenesisCertificate),
         _ => Err(Error::InvalidComponent("marker kind")),
     }
+}
+
+fn option_tag(r: &mut Reader<'_>) -> Result<bool> {
+    match r.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Error::InvalidComponent("footer option tag")),
+    }
+}
+
+/// Skips a reward certificate's signer bitmap, whose length is a compact
+/// integer where a finality certificate's is a `u16`.
+fn reward_bitmap(r: &mut Reader<'_>) -> Result<()> {
+    let len = usize::from(r.short_u16()?);
+    if len > MAX_BITMAP_LEN {
+        return Err(Error::LimitExceeded("signer bitmap"));
+    }
+    r.bytes(len)?;
+    Ok(())
 }
 
 fn read_aggregate(r: &mut Reader<'_>) -> Result<Aggregate> {
@@ -304,6 +350,58 @@ mod tests {
                 Err(Error::TransactionNotFound)
             );
         }
+    }
+
+    /// Rebuilds a testkit footer with different bytes after the finality
+    /// certificate, fixing the marker's length prefix.
+    fn footer_with_tail(tail: &[u8]) -> Vec<u8> {
+        let mut bytes = testkit::footer_component([8; 32], 1, b"agent", None);
+        // Drop the two "no reward certificate" tags and append the new tail.
+        bytes.truncate(bytes.len() - 2);
+        bytes.extend_from_slice(tail);
+        let len = (bytes.len() - 13) as u16;
+        bytes[11..13].copy_from_slice(&len.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn footer_is_read_to_its_end_like_a_validator_reads_it() {
+        // Both reward certificates present: slot, [block id,] signature, and
+        // a bitmap behind a compact length.
+        let mut tail = vec![1];
+        tail.extend_from_slice(&7u64.to_le_bytes());
+        tail.extend_from_slice(&[0xaa; 96]);
+        tail.extend_from_slice(&[4, 0, 8, 0, 0xff]);
+        tail.push(1);
+        tail.extend_from_slice(&7u64.to_le_bytes());
+        tail.extend_from_slice(&[0xbb; 32]);
+        tail.extend_from_slice(&[0xcc; 96]);
+        tail.extend_from_slice(&[4, 0, 8, 0, 0x0f]);
+        assert!(matches!(
+            parse_marker(&footer_with_tail(&tail)).unwrap(),
+            Marker::Footer(_)
+        ));
+
+        // Neither present, the common case.
+        assert!(parse_marker(&footer_with_tail(&[0, 0])).is_ok());
+
+        // A validator rejects a footer whose length prefix covers more than
+        // the footer, or less. So must the verifier.
+        assert_eq!(
+            parse_marker(&footer_with_tail(&[0, 0, 0])),
+            Err(Error::InvalidComponent("footer length"))
+        );
+        assert_eq!(parse_marker(&footer_with_tail(&[0])), Err(Error::Truncated));
+        // A certificate cut short inside the declared length.
+        assert_eq!(
+            parse_marker(&footer_with_tail(&tail[..tail.len() - 1])),
+            Err(Error::Truncated)
+        );
+        // An option tag that is neither 0 nor 1.
+        assert_eq!(
+            parse_marker(&footer_with_tail(&[2, 0])),
+            Err(Error::InvalidComponent("footer option tag"))
+        );
     }
 
     #[test]

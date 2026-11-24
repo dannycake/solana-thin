@@ -15,6 +15,11 @@ default = []
 # Deterministic block and validator builders used by the test suite and examples.
 # Never needed by a verifier.
 testkit = []
+# Checks a certificate against an older validator set when the right one has
+# not been pinned. UNSOUND: its safety argument has a counterexample, see
+# docs/DESIGN.md ("Stale-set mode"). Off by default; never enable it where a
+# wrong answer costs anything.
+unsound-stale-set = []
 
 [dependencies]
 blst = { version = "0.3.14", default-features = false }

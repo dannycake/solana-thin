@@ -22,6 +22,13 @@ use std::collections::BTreeMap;
 const MAGIC: &[u8; 3] = b"STP";
 const VERSION: u8 = 1;
 
+/// The most FEC sets a block can have: 32,768 data shreds in sets of 32.
+///
+/// A consensus rule, not a tunable. Validators refuse a parent leaf that
+/// claims more (`MAX_FEC_SETS_PER_SLOT`, checked in Agave's
+/// `core/src/repair/serve_repair.rs`), so no finalized block does.
+pub const MAX_FEC_SETS_PER_SLOT: u32 = 1024;
+
 /// Upper bounds a verifier enforces before it does any work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -29,9 +36,6 @@ pub struct Limits {
     pub max_proof_bytes: usize,
     /// Longest ancestry chain.
     pub max_ancestry: usize,
-    /// Most FEC sets a block may claim. A slot's shred index is a `u32`, and a
-    /// set holds 32 data shreds.
-    pub max_fec_sets: u32,
 }
 
 impl Default for Limits {
@@ -39,7 +43,6 @@ impl Default for Limits {
         Self {
             max_proof_bytes: 8 << 20,
             max_ancestry: 4096,
-            max_fec_sets: 1 << 15,
         }
     }
 }
@@ -62,11 +65,11 @@ pub struct ParentLink {
 
 impl ParentLink {
     /// Checks that `child` commits to this parent and FEC set count.
-    pub fn verify(&self, child: &BlockRef, limits: &Limits) -> Result<()> {
+    pub fn verify(&self, child: &BlockRef) -> Result<()> {
         if self.parent.slot >= child.slot {
             return Err(Error::InvalidParent);
         }
-        if self.fec_set_count == 0 || self.fec_set_count > limits.max_fec_sets {
+        if self.fec_set_count == 0 || self.fec_set_count > MAX_FEC_SETS_PER_SLOT {
             return Err(Error::LimitExceeded("FEC set count"));
         }
         let leaf = merkle::sha256(&[
@@ -93,7 +96,11 @@ pub struct FecSetProof {
     pub first: u8,
     /// The shreds, consecutive from `first`.
     pub shreds: Vec<DataShred>,
-    /// Root of the previous FEC set, which every shred of this set carries.
+    /// The 32 bytes every shred of this set carries in its "chained root"
+    /// field. They are part of what is hashed, so the proof must supply
+    /// them, but nothing checks them: since Alpenglow, validators no longer
+    /// require them to be the previous set's root. Treat them as bytes the
+    /// leader chose.
     pub chained_root: Hash,
     /// Subtree hashes covering the set's other data shreds.
     pub siblings: Vec<Node>,
@@ -129,9 +136,8 @@ impl BlockProof {
         &'a self,
         block: &BlockRef,
         shred_version: u16,
-        limits: &Limits,
     ) -> Result<VerifiedShreds<'a>> {
-        self.parent.verify(block, limits)?;
+        self.parent.verify(block)?;
         let fec_set_count = self.parent.fec_set_count;
         let tree_leaves = fec_set_count as usize + 1;
         let mut shreds = BTreeMap::new();

@@ -9,7 +9,9 @@ use crate::error::{Error, Result};
 use crate::merkle::Hash;
 use crate::proof::{Limits, TxProof};
 use crate::transaction::Transaction;
-use crate::validator_set::{CandidateSet, ValidatorSet};
+#[cfg(feature = "unsound-stale-set")]
+use crate::validator_set::CandidateSet;
+use crate::validator_set::ValidatorSet;
 use std::collections::BTreeMap;
 
 /// Facts about the cluster that are not in any proof.
@@ -72,6 +74,7 @@ impl ClusterParams {
 /// Treat it as a grace window for showing something rather than nothing. Do
 /// not move value on it, keep `max_epochs` at one, and pin a fresh set as
 /// soon as you can get one.
+#[cfg(feature = "unsound-stale-set")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StalePolicy {
     /// How many epochs past a pinned set this may be used.
@@ -91,10 +94,21 @@ pub struct FinalizedBlock {
 
 /// A transaction proven to be in a finalized block.
 ///
-/// **This says the transaction was included and processed. It does not say it
-/// succeeded.** A transaction whose program returned an error still lands in
-/// the block and still pays its fee, and nothing a block commits to records
-/// the difference in a form a small proof can open. See the crate docs.
+/// **This says the transaction is in a finalized block, in a part validators
+/// executed. It does not say it succeeded, or that it did anything at all.**
+///
+/// * A transaction whose program returned an error still lands in the block
+///   and pays its fee.
+/// * A transaction that could not load its accounts lands, pays its fee and
+///   runs nothing.
+/// * Where the cluster has activated `relax_fee_payer_constraint`
+///   (SIMD-0290), a transaction whose fee payer cannot pay may land as a
+///   no-op: no fee, nothing run. Honest leaders leave these out, but a block
+///   that carries one is valid.
+///
+/// Nothing a block commits to records the difference in a form a small proof
+/// can open. Build on what inclusion alone gives: these bytes, signed by
+/// their signers, were ordered into this block. See the crate docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedTransaction {
     /// The transaction.
@@ -136,7 +150,9 @@ impl VerifiedTransaction {
 pub struct ThinClient {
     params: ClusterParams,
     trusted: BTreeMap<u64, ValidatorSet>,
+    #[cfg(feature = "unsound-stale-set")]
     candidates: BTreeMap<u64, CandidateSet>,
+    #[cfg(feature = "unsound-stale-set")]
     stale: Option<StalePolicy>,
     limits: Limits,
 }
@@ -147,7 +163,9 @@ impl ThinClient {
         Self {
             params,
             trusted: BTreeMap::new(),
+            #[cfg(feature = "unsound-stale-set")]
             candidates: BTreeMap::new(),
+            #[cfg(feature = "unsound-stale-set")]
             stale: None,
             limits: Limits::default(),
         }
@@ -187,18 +205,22 @@ impl ThinClient {
         self.trusted.get(&epoch)
     }
 
-    /// Turns on stale-set verification. Off by default.
+    /// Turns on stale-set verification. Off by default, and unsound.
+    #[cfg(feature = "unsound-stale-set")]
     pub fn set_stale_policy(&mut self, policy: Option<StalePolicy>) {
         self.stale = policy;
     }
 
     /// Supplies an untrusted key list for `epoch`, used only under a
     /// [`StalePolicy`].
+    #[cfg(feature = "unsound-stale-set")]
     pub fn add_candidate_set(&mut self, epoch: u64, candidates: CandidateSet) {
         self.candidates.insert(epoch, candidates);
     }
 
-    /// Checks a finality certificate.
+    /// Checks a finality certificate against the validator set pinned for the
+    /// epoch of its slot. With no set pinned for that epoch the answer is
+    /// [`Error::UnknownEpoch`].
     pub fn verify_finality(&self, cert: &FinalityCert) -> Result<FinalizedBlock> {
         let block = cert.block();
         let epoch = self.params.epoch_of(block.slot)?;
@@ -231,8 +253,25 @@ impl ThinClient {
             return Ok(FinalizedBlock { block, finality });
         }
 
-        // No pinned set for this epoch. Fall back to an older one only if the
-        // caller opted in.
+        #[cfg(not(feature = "unsound-stale-set"))]
+        {
+            let _ = (parts, finality);
+            Err(Error::UnknownEpoch(epoch))
+        }
+        #[cfg(feature = "unsound-stale-set")]
+        self.verify_finality_stale(epoch, block, finality, parts)
+    }
+
+    /// No pinned set for the certificate's epoch: fall back to an older one,
+    /// if the caller opted in.
+    #[cfg(feature = "unsound-stale-set")]
+    fn verify_finality_stale(
+        &self,
+        epoch: u64,
+        block: BlockRef,
+        finality: Finality,
+        parts: Vec<(&crate::certificate::Aggregate, &[u8], u32)>,
+    ) -> Result<FinalizedBlock> {
         let policy = self.stale.ok_or(Error::UnknownEpoch(epoch))?;
         let (trusted_epoch, trusted) = self
             .trusted
@@ -281,14 +320,12 @@ impl ThinClient {
         }
         let mut block = finalized_by.block;
         for link in &proof.ancestry {
-            link.verify(&block, &self.limits)?;
+            link.verify(&block)?;
             block = link.parent;
         }
 
         // 3. Open that block's shreds.
-        let shreds = proof
-            .block
-            .verify(&block, self.params.shred_version, &self.limits)?;
+        let shreds = proof.block.verify(&block, self.params.shred_version)?;
 
         // 4. The block must have run from its first shred. The header in
         //    shred 0 names the parent the leader started on; the tree names

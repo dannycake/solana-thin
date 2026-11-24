@@ -229,6 +229,7 @@ impl ValidatorSet {
         Ok(ranks.iter().map(|rank| self.validators[*rank].stake).sum())
     }
 
+    #[cfg(feature = "unsound-stale-set")]
     fn stake_by_key(&self) -> HashMap<[u8; 48], u64> {
         self.validators
             .iter()
@@ -269,6 +270,7 @@ impl ProofOfPossession {
 
 /// One rank of an unverified validator list for an epoch the client has no
 /// pinned set for.
+#[cfg(feature = "unsound-stale-set")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     /// The BLS key claimed to hold this rank.
@@ -290,6 +292,7 @@ pub struct Candidate {
 ///   aggregate (a rogue-key attack) and forge any certificate.
 /// * No key may appear twice. A doubled key would let one real signature be
 ///   counted as two.
+#[cfg(feature = "unsound-stale-set")]
 #[derive(Clone)]
 pub struct CandidateSet {
     keys: Vec<[u8; 48]>,
@@ -297,6 +300,7 @@ pub struct CandidateSet {
     proven: Vec<bool>,
 }
 
+#[cfg(feature = "unsound-stale-set")]
 impl core::fmt::Debug for CandidateSet {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("CandidateSet")
@@ -305,6 +309,7 @@ impl core::fmt::Debug for CandidateSet {
     }
 }
 
+#[cfg(feature = "unsound-stale-set")]
 impl CandidateSet {
     /// Checks and stores a candidate list. Proofs of possession are verified
     /// here, once, so that certificate checks stay cheap.

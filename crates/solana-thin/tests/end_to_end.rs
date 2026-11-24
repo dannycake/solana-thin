@@ -177,6 +177,7 @@ fn proofs_stay_small() {
     assert!(chained.len() - small.len() < 400);
 }
 
+#[cfg(feature = "unsound-stale-set")]
 #[test]
 fn stale_mode_accepts_a_next_epoch_certificate_from_known_signers() {
     let mut w = world();

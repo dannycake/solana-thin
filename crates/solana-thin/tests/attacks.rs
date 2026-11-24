@@ -294,174 +294,179 @@ fn a_rogue_key_forges_everything_if_an_unpinned_set_is_trusted() {
 }
 
 // ---------------------------------------------------------------------------
-// Stale-set mode
+// Stale-set mode (the `unsound-stale-set` feature)
 // ---------------------------------------------------------------------------
 
-fn stale_world() -> (World, BlockRef) {
-    let mut w = world();
-    w.client.set_stale_policy(Some(StalePolicy {
-        max_epochs: 2,
-        drift_bps_per_epoch: 900,
-    }));
-    let block = BlockRef {
-        slot: 432_000 + 9,
-        id: [0x51; 32],
-    };
-    (w, block)
-}
+#[cfg(feature = "unsound-stale-set")]
+mod stale_set_mode {
+    use super::*;
 
-fn known(w: &World) -> Vec<Candidate> {
-    (0..w.validators.len())
-        .map(|rank| Candidate {
-            bls_pubkey: w.validators.pubkey(rank),
-            proof_of_possession: None,
-        })
-        .collect()
-}
-
-/// In stale mode the key list for the new epoch comes from an untrusted
-/// source, so the rogue-key attack is live. A key the client has never seen
-/// must prove possession or the certificate is refused outright.
-#[test]
-fn stale_mode_refuses_unknown_keys_without_proof_of_possession() {
-    let (mut w, block) = stale_world();
-    let attacker = TestValidators::with_seed(1234, 1, |_| 1);
-
-    let honest_keys: Vec<blst::min_pk::PublicKey> = (0..w.validators.len())
-        .map(|r| blst::min_pk::PublicKey::uncompress(&w.validators.pubkey(r)).unwrap())
-        .collect();
-    let refs: Vec<&blst::min_pk::PublicKey> = honest_keys.iter().collect();
-    let mut negated = blst::min_pk::AggregatePublicKey::aggregate(&refs, false)
-        .unwrap()
-        .to_public_key()
-        .compress();
-    negated[0] ^= 0x20;
-    let negated = blst::min_pk::PublicKey::uncompress(&negated).unwrap();
-    let x_key = blst::min_pk::PublicKey::uncompress(&attacker.pubkey(0)).unwrap();
-    let rogue = blst::min_pk::AggregatePublicKey::aggregate(&[&x_key, &negated], false)
-        .unwrap()
-        .to_public_key()
-        .compress();
-
-    let mut candidates = known(&w);
-    candidates.push(Candidate {
-        bls_pubkey: rogue,
-        proof_of_possession: None,
-    });
-    let everyone: Vec<usize> = (0..candidates.len()).collect();
-    let forged = FinalityCert::Fast {
-        block,
-        notar: Aggregate {
-            signature: attacker
-                .sign(0, &notarize_payload(&block, SHRED_VERSION))
-                .compress(),
-            bitmap: encode_bitmap(&everyone),
-        },
-    };
-
-    w.client
-        .add_candidate_set(1, CandidateSet::new(candidates.clone()).unwrap());
-    assert_eq!(
-        w.client.verify_finality(&forged),
-        Err(Error::MissingProofOfPossession)
-    );
-
-    // The attacker cannot produce the proof: it would need the rogue key's
-    // secret. Its own key's proof, or one for another account, does not fit.
-    let last = candidates.len() - 1;
-    candidates[last].proof_of_possession = Some(attacker.proof_of_possession(0, [1; 32]));
-    w.client
-        .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
-    assert_eq!(
-        w.client.verify_finality(&forged),
-        Err(Error::MissingProofOfPossession)
-    );
-}
-
-/// Keys the client does not already trust may sign, if they prove possession,
-/// but they carry no weight. An attacker cannot vote itself into a majority.
-#[test]
-fn stale_mode_gives_new_keys_no_weight() {
-    let (mut w, block) = stale_world();
-    let newcomers = TestValidators::with_seed(77, 30, |_| 9_000_000);
-    let mut candidates: Vec<Candidate> = (0..newcomers.len())
-        .map(|rank| Candidate {
-            bls_pubkey: newcomers.pubkey(rank),
-            proof_of_possession: Some(newcomers.proof_of_possession(rank, [rank as u8; 32])),
-        })
-        .collect();
-    candidates.extend(known(&w));
-    w.client
-        .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
-
-    // All thirty newcomers sign. Valid signature, valid proofs, zero stake.
-    let ranks: Vec<usize> = (0..newcomers.len()).collect();
-    let cert = newcomers.fast_cert(block, &ranks, SHRED_VERSION);
-    assert!(matches!(
-        w.client.verify_finality(&cert),
-        Err(Error::InsufficientStake { signed: 0, .. })
-    ));
-}
-
-/// Listing an honest key twice would let one real signature count double:
-/// twice the signature verifies against twice the key.
-#[test]
-fn stale_mode_refuses_a_key_listed_twice() {
-    let (w, _) = stale_world();
-    let mut candidates = known(&w);
-    candidates.push(candidates[0].clone());
-    assert_eq!(
-        CandidateSet::new(candidates).unwrap_err(),
-        Error::DuplicateValidator
-    );
-}
-
-/// Old stake is an estimate of new stake, so stale mode demands more of it,
-/// and gives up entirely past the configured distance.
-#[test]
-fn stale_mode_raises_the_bar_with_distance() {
-    let (mut w, block) = stale_world();
-    for epoch in 1..=3 {
-        w.client
-            .add_candidate_set(epoch, CandidateSet::new(known(&w)).unwrap());
-    }
-    let cert_at = |w: &World, epoch: u64, bps: u32| {
+    fn stale_world() -> (World, BlockRef) {
+        let mut w = world();
+        w.client.set_stale_policy(Some(StalePolicy {
+            max_epochs: 2,
+            drift_bps_per_epoch: 900,
+        }));
         let block = BlockRef {
-            slot: 432_000 * epoch + 9,
-            id: block.id,
+            slot: 432_000 + 9,
+            id: [0x51; 32],
         };
-        w.validators
-            .fast_cert(block, &w.validators.ranks_reaching(bps), SHRED_VERSION)
-    };
-    // One epoch out: 80% is not enough, 89% is.
-    assert!(matches!(
-        w.client.verify_finality(&cert_at(&w, 1, 8_000)),
-        Err(Error::InsufficientStake {
-            required_bps: 8_900,
-            ..
-        })
-    ));
-    assert!(w.client.verify_finality(&cert_at(&w, 1, 8_900)).is_ok());
-    // Two epochs out: 98%.
-    assert!(matches!(
-        w.client.verify_finality(&cert_at(&w, 2, 9_000)),
-        Err(Error::InsufficientStake {
-            required_bps: 9_800,
-            ..
-        })
-    ));
-    assert!(w.client.verify_finality(&cert_at(&w, 2, 10_000)).is_ok());
-    // Three epochs out: past max_epochs.
-    assert_eq!(
-        w.client.verify_finality(&cert_at(&w, 3, 10_000)),
-        Err(Error::TooStale)
-    );
-    // With the policy off, none of it applies.
-    w.client.set_stale_policy(None);
-    assert_eq!(
-        w.client.verify_finality(&cert_at(&w, 1, 10_000)),
-        Err(Error::UnknownEpoch(1))
-    );
+        (w, block)
+    }
+
+    fn known(w: &World) -> Vec<Candidate> {
+        (0..w.validators.len())
+            .map(|rank| Candidate {
+                bls_pubkey: w.validators.pubkey(rank),
+                proof_of_possession: None,
+            })
+            .collect()
+    }
+
+    /// In stale mode the key list for the new epoch comes from an untrusted
+    /// source, so the rogue-key attack is live. A key the client has never seen
+    /// must prove possession or the certificate is refused outright.
+    #[test]
+    fn stale_mode_refuses_unknown_keys_without_proof_of_possession() {
+        let (mut w, block) = stale_world();
+        let attacker = TestValidators::with_seed(1234, 1, |_| 1);
+
+        let honest_keys: Vec<blst::min_pk::PublicKey> = (0..w.validators.len())
+            .map(|r| blst::min_pk::PublicKey::uncompress(&w.validators.pubkey(r)).unwrap())
+            .collect();
+        let refs: Vec<&blst::min_pk::PublicKey> = honest_keys.iter().collect();
+        let mut negated = blst::min_pk::AggregatePublicKey::aggregate(&refs, false)
+            .unwrap()
+            .to_public_key()
+            .compress();
+        negated[0] ^= 0x20;
+        let negated = blst::min_pk::PublicKey::uncompress(&negated).unwrap();
+        let x_key = blst::min_pk::PublicKey::uncompress(&attacker.pubkey(0)).unwrap();
+        let rogue = blst::min_pk::AggregatePublicKey::aggregate(&[&x_key, &negated], false)
+            .unwrap()
+            .to_public_key()
+            .compress();
+
+        let mut candidates = known(&w);
+        candidates.push(Candidate {
+            bls_pubkey: rogue,
+            proof_of_possession: None,
+        });
+        let everyone: Vec<usize> = (0..candidates.len()).collect();
+        let forged = FinalityCert::Fast {
+            block,
+            notar: Aggregate {
+                signature: attacker
+                    .sign(0, &notarize_payload(&block, SHRED_VERSION))
+                    .compress(),
+                bitmap: encode_bitmap(&everyone),
+            },
+        };
+
+        w.client
+            .add_candidate_set(1, CandidateSet::new(candidates.clone()).unwrap());
+        assert_eq!(
+            w.client.verify_finality(&forged),
+            Err(Error::MissingProofOfPossession)
+        );
+
+        // The attacker cannot produce the proof: it would need the rogue key's
+        // secret. Its own key's proof, or one for another account, does not fit.
+        let last = candidates.len() - 1;
+        candidates[last].proof_of_possession = Some(attacker.proof_of_possession(0, [1; 32]));
+        w.client
+            .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
+        assert_eq!(
+            w.client.verify_finality(&forged),
+            Err(Error::MissingProofOfPossession)
+        );
+    }
+
+    /// Keys the client does not already trust may sign, if they prove possession,
+    /// but they carry no weight. An attacker cannot vote itself into a majority.
+    #[test]
+    fn stale_mode_gives_new_keys_no_weight() {
+        let (mut w, block) = stale_world();
+        let newcomers = TestValidators::with_seed(77, 30, |_| 9_000_000);
+        let mut candidates: Vec<Candidate> = (0..newcomers.len())
+            .map(|rank| Candidate {
+                bls_pubkey: newcomers.pubkey(rank),
+                proof_of_possession: Some(newcomers.proof_of_possession(rank, [rank as u8; 32])),
+            })
+            .collect();
+        candidates.extend(known(&w));
+        w.client
+            .add_candidate_set(1, CandidateSet::new(candidates).unwrap());
+
+        // All thirty newcomers sign. Valid signature, valid proofs, zero stake.
+        let ranks: Vec<usize> = (0..newcomers.len()).collect();
+        let cert = newcomers.fast_cert(block, &ranks, SHRED_VERSION);
+        assert!(matches!(
+            w.client.verify_finality(&cert),
+            Err(Error::InsufficientStake { signed: 0, .. })
+        ));
+    }
+
+    /// Listing an honest key twice would let one real signature count double:
+    /// twice the signature verifies against twice the key.
+    #[test]
+    fn stale_mode_refuses_a_key_listed_twice() {
+        let (w, _) = stale_world();
+        let mut candidates = known(&w);
+        candidates.push(candidates[0].clone());
+        assert_eq!(
+            CandidateSet::new(candidates).unwrap_err(),
+            Error::DuplicateValidator
+        );
+    }
+
+    /// Old stake is an estimate of new stake, so stale mode demands more of it,
+    /// and gives up entirely past the configured distance.
+    #[test]
+    fn stale_mode_raises_the_bar_with_distance() {
+        let (mut w, block) = stale_world();
+        for epoch in 1..=3 {
+            w.client
+                .add_candidate_set(epoch, CandidateSet::new(known(&w)).unwrap());
+        }
+        let cert_at = |w: &World, epoch: u64, bps: u32| {
+            let block = BlockRef {
+                slot: 432_000 * epoch + 9,
+                id: block.id,
+            };
+            w.validators
+                .fast_cert(block, &w.validators.ranks_reaching(bps), SHRED_VERSION)
+        };
+        // One epoch out: 80% is not enough, 89% is.
+        assert!(matches!(
+            w.client.verify_finality(&cert_at(&w, 1, 8_000)),
+            Err(Error::InsufficientStake {
+                required_bps: 8_900,
+                ..
+            })
+        ));
+        assert!(w.client.verify_finality(&cert_at(&w, 1, 8_900)).is_ok());
+        // Two epochs out: 98%.
+        assert!(matches!(
+            w.client.verify_finality(&cert_at(&w, 2, 9_000)),
+            Err(Error::InsufficientStake {
+                required_bps: 9_800,
+                ..
+            })
+        ));
+        assert!(w.client.verify_finality(&cert_at(&w, 2, 10_000)).is_ok());
+        // Three epochs out: past max_epochs.
+        assert_eq!(
+            w.client.verify_finality(&cert_at(&w, 3, 10_000)),
+            Err(Error::TooStale)
+        );
+        // With the policy off, none of it applies.
+        w.client.set_stale_policy(None);
+        assert_eq!(
+            w.client.verify_finality(&cert_at(&w, 1, 10_000)),
+            Err(Error::UnknownEpoch(1))
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -991,16 +996,34 @@ fn only_real_ancestors_inherit_finality() {
     // Nor can a "parent" be in a later slot than its child.
     let mut backwards = b2.parent_link();
     backwards.parent.slot = b2.block().slot;
-    assert_eq!(
-        backwards.verify(&b2.block(), &Limits::default()),
-        Err(Error::InvalidParent)
-    );
+    assert_eq!(backwards.verify(&b2.block()), Err(Error::InvalidParent));
 
     // Skipping a link breaks the chain.
     let chain = [b3, b2, b1];
     let mut skipping = prover::prove(cert_b3, &chain, &signature_for(0), false).unwrap();
     skipping.ancestry.remove(0);
     assert!(w.client.verify_transaction(&skipping).is_err());
+}
+
+/// No block has more than 1,024 FEC sets, and validators refuse a parent
+/// leaf that claims more. A proof that claims more is refused before any
+/// hashing is done on its say-so.
+#[test]
+fn a_block_cannot_claim_more_fec_sets_than_consensus_allows() {
+    let w = world();
+    let child = w.blocks[1].block();
+    let mut link = w.blocks[1].parent_link();
+    assert!(link.verify(&child).is_ok());
+    link.fec_set_count = MAX_FEC_SETS_PER_SLOT + 1;
+    assert_eq!(
+        link.verify(&child),
+        Err(Error::LimitExceeded("FEC set count"))
+    );
+    link.fec_set_count = 0;
+    assert_eq!(
+        link.verify(&child),
+        Err(Error::LimitExceeded("FEC set count"))
+    );
 }
 
 // ---------------------------------------------------------------------------
