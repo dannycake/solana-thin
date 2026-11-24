@@ -17,6 +17,7 @@ publish = false
 agave-bls-cert-verify = { path = "../agave/bls-cert-verify", features = ["agave-unstable-api", "dev-context-only-utils"] }
 agave-votor-messages = { path = "../agave/votor-messages", features = ["agave-unstable-api", "dev-context-only-utils"] }
 solana-core = { path = "../agave/core", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-leader-schedule = { path = "../agave/leader-schedule" }
 solana-local-cluster = { path = "../agave/local-cluster", features = ["agave-unstable-api", "dev-context-only-utils"] }
 solana-net-utils = { path = "../agave/net-utils", features = ["agave-unstable-api"] }
 solana-rpc-client = { path = "../agave/rpc-client", features = ["agave-unstable-api"] }

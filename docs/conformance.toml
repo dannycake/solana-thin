@@ -429,7 +429,7 @@ error = ""
 consequence = "silently no header"
 status = "enforced"
 test = "a_header_split_across_shreds_does_not_hide_an_abandoned_prefix"
-note = "Firedancer agrees (fd_repair.c L923-925) and goes further: no whole header in shred 0 invalidates the slot."
+note = "Firedancer agrees (fd_repair.c L923-925) and goes further: no whole header in shred 0 invalidates the slot. Agave validators were seen to root a block with a split header and a same-parent UpdateParent, executing only what follows the marker (docs/LOCAL-VALIDATOR.md)."
 
 [[check]]
 id = 37

@@ -147,6 +147,7 @@ dependencies = [
  "solana-epoch-schedule",
  "solana-hash",
  "solana-keypair",
+ "solana-leader-schedule",
  "solana-ledger",
  "solana-local-cluster",
  "solana-message",

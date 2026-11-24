@@ -27,6 +27,23 @@ Two more binaries share this crate because they need the same Agave build.
   ledger and a validator set per epoch in `<out dir>`. `LocalCluster` writes
   its ledgers inside the Agave checkout; `cluster-run` moves or deletes them
   when it finishes.
+- `cluster-inject <out dir>` runs the same four-validator Alpenglow cluster
+  with a fixed leader schedule, stops the 10% validator, and injects
+  hand-built blocks for the slots it would have led, signed with its held node
+  keypair, straight into the running validators' TVU ports with
+  `Cluster::send_shreds_to_validator`. The footer's bank hash is settled by
+  replaying the block against a child of a live validator's in-process
+  `BankForks` bank on a scratch blockstore. For each case it prints the
+  injected slot, what the validators did (inserted / dead / full / rooted,
+  from the target validator's own blockstore and bank forks), whether the
+  abandoned transfer X and the suffix transfer executed (recipient balances),
+  and what the light client says — both `BlockData::from_shreds` on the
+  injected shreds and, for a finalized block, a proof of a suffix transaction
+  against the real footer finality certificate and the recorded validator set
+  (as `examples/verify_ledger.rs` does). It turns "seen in a single-process
+  replay" into "seen on running validators". See `ORACLE-NOTES.md` for what
+  each case did. Exit status is 0 if the run completed, whatever the
+  validators decided; it cleans up `LocalCluster`'s ledgers like `cluster-run`.
 
 ## The differential oracle
 

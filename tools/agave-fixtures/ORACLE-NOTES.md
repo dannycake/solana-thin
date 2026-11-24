@@ -410,3 +410,114 @@ CHECK ok   the honest block still gets the same verdict after all of the above
 
 smoke: all checks passed (0.2 s)
 ```
+
+## T10: real validators (`cluster-inject`)
+
+The single-process oracle above never runs the live replay stage, turbine or
+votor. `src/bin/cluster-inject.rs` injects hand-built blocks into a running
+four-validator Alpenglow `LocalCluster` and reports what the validators
+actually do, turning "seen in a single-process replay" into "seen on running
+validators".
+
+**Setup.** Four validators with 40/30/20/10% stake and a fixed leader schedule
+(four-slot chunks round-robin, so the 10% validator owns the window
+`[12..16)` of every sixteen-slot rotation). After a warmup the 10% validator
+is stopped (`exit_node`); nobody then produces its slots, and its 10% does not
+block the other 90% from finalizing. Blocks for its window-start slots
+(`% 16 == 12`) are built, signed with its held node keypair, and sent to every
+running validator's TVU with `Cluster::send_shreds_to_validator`.
+
+**The bank hash against live state (the part the brief called unverified).**
+The footer's bank hash is settled in process: the parent is the current head
+(a frozen bank with a block id, read from the target validator's
+`Validator::bank_forks`), the block is replayed against a child of that bank on
+a scratch blockstore with a scheduler taken from a fresh
+`DefaultSchedulerPool::new_for_verification`, and the hash is read from
+`process_single_slot` (clean, or the mismatch's computed hash). This settled
+cleanly against live banks for every honest and split-header block tried.
+
+**Timing.** The injected slot must be `head + 1` on the canonical chain, so the
+tool waits until the head is the slot just before an injected window, then
+builds and injects at once and resends four times; a miss (votor skips the
+slot before the shreds land) is retried at the next window. One or two
+attempts were enough for the honest and split-header blocks. The gate job was
+loading the machine during the run; it did not stop any case finalizing.
+
+**Results** (one run; slots differ per run, keys are seeded so the leader is
+stable):
+
+- **(A) honest block — FINALIZED.** Injected at slot 284 on head 283. The
+  target validator inserted it, the slot went full and not dead, and it was
+  **rooted with our block id**; the suffix transfer executed (recipient holds
+  2,000,000). The light client then **proved the suffix transaction against the
+  real fast finality certificate** found in the footer of slot 292, verified
+  against the recorded validator set (1,742-byte proof). The full path —
+  inject, finalize, verify with a real certificate — works end to end.
+
+- **(C) split-header block — FINALIZED, and the single-process prediction holds
+  on live validators.** 54-byte header cut 20/34 across shreds 0 and 1, an
+  abandoned prefix with transfer X, an UpdateParent naming the same parent as
+  the header, a suffix, footer, alpentick. Injected at slot 492; the validator
+  inserted it, the slot went full and not dead, and it was **rooted**. Replay
+  started from the marker: the **suffix executed (recipient holds 2,000,000)**
+  while **X did not (balance 0)** — exactly what the oracle predicted from the
+  source, now observed on running validators that voted and rooted the block.
+  The light client **refuses the whole block** (`BlockData::from_shreds`:
+  "block switched parent mid-way; inclusion cannot be proven"), so a claim on X
+  — and on the suffix — is unprovable. This is the soundness property the
+  verifier is built to hold: Agave finalizes a block the verifier will not
+  certify any transaction from.
+
+- **(B) legitimate UpdateParent to an older ancestor — NOT finalized; a live/
+  single-process difference.** Header on the head, abandoned prefix with X,
+  UpdateParent to the head's parent (an older ancestor), suffix, footer, tick;
+  replay from shred 64. Across four attempts the running validators **inserted
+  the shreds but the slot never became full and was marked dead** (`inserted
+  true, full false, dead true`) and never rooted. The scratch replay settled a
+  bank hash on three of the four attempts, so the block is structurally
+  complete; the live blockstore still would not complete the slot. This is a
+  real divergence from the single-process oracle, which replays the full slot
+  once and votes for the equivalent `update-parent/ancestor` corpus case: the
+  live window service applies a check the scratch's trusted insert bypasses
+  (the most likely culprits are `validate_update_parent_slot` and the chained
+  Merkle root of the marker's FEC set against the older ancestor, which the
+  testkit seeds arbitrarily — harmless where the oracle's root never moves,
+  fatal once a live validator checks it against a real ancestor). The verifier
+  refuses B's block for the same reason it refuses C. Getting B to finalize
+  would need the injected shreds to carry the real chained Merkle root of the
+  ancestor's last FEC set; that was out of this task's time box.
+
+- **(D) zero-parent / C2 — not constructible on a live cluster.** A C2 block's
+  parent must be slot 0 with an all-zero block id, so the block must be one of
+  the cluster's very first slots (a small slot `== 0 mod 4`). Injection only
+  starts after a warmup, by which point the head is far past slot 0 and slot 0
+  is never a reachable parent, so the block cannot be placed on the canonical
+  chain. Skipped with that reason; the single-process oracle already exercises
+  the C2 shape (`known/c2-zero-parent-update-parent`).
+
+**What live validators did that the single-process oracle did not show.**
+
+- The honest and split-header blocks, injected as `head + 1`, were **voted and
+  rooted by the live cluster**, not merely replayed — the oracle only reports
+  "would vote". The split-header block's abandoned-prefix/suffix split survives
+  the live replay stage, turbine re-propagation and votor, exactly as the
+  single-process replay predicted.
+- The legitimate ancestor UpdateParent (B) **does not complete on a live
+  validator** even though the single-process oracle votes for its corpus
+  twin and the scratch replay settles its bank hash. The live window service's
+  slot-completion path is stricter than inserting every shred and replaying
+  once. This is the most useful thing the run produced: the oracle's "votes"
+  verdict for a cross-FEC-boundary UpdateParent to an older ancestor is not by
+  itself evidence a live validator will finalize it.
+- Finalization is timing-sensitive: a block injected a beat late is inserted
+  and replayed cleanly (full, not dead, correct block id) but votor has already
+  skipped the slot, so it never roots. "Inserted and replayed" and "finalized"
+  are distinct outcomes; only rooting is finality.
+
+**Caveats.** One `LocalCluster` run per invocation; slots and the few-second
+rooting window vary with machine load. The scratch replay uses a trusted insert
+(no filter/duplicate handling) because it only needs the bank hash. The tool
+targets one validator (40% stake) for in-process reads and injects to all three
+running validators. B's non-finalization is reported from the blockstore, not
+root-caused to a single Agave function by reading; the candidates above are
+from the source, not confirmed by a live log capture.

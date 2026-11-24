@@ -297,6 +297,13 @@ blockstore and replay beside the verifier.
 4. **Not modelled:** the live replay stage (partial replay, restart on an
    abandoned prefix), erasure recovery, more than one slot of ancestry, and
    anything that is not this one Agave build.
+5. **On running validators** (`cluster-inject`, see `LOCAL-VALIDATOR.md`):
+   three validators rooted the split-header block and executed only what
+   follows the marker. That is the first finding of the 2026-11-23 review
+   seen live rather than read. They did not complete a block whose
+   UpdateParent names an older ancestor, which the single-process oracle
+   votes for; the likely reason is that the ancestor is below the live root,
+   which never advances in the oracle. Not confirmed.
 
 Confirmed to match, with file and line, by the same read: shred header
 offsets and capacities, the leaf and node hashing, the double-Merkle tree and

@@ -71,6 +71,33 @@ Given a directory, `verify_ledger` pins the set from
 `vote-accounts-epoch-<E>.json` for epoch `E + 1`. `SET_OFFSET=0` or `2` shows
 the other two rows.
 
+## Attack blocks, injected into running validators
+
+`cluster-inject` (in `tools/agave-fixtures`) runs the same four-validator
+cluster, stops the 10% validator, and sends hand-built blocks for its leader
+slots, signed with its key, to the other three over their shred ports. Each
+block is built on the cluster's current head and its footer's bank hash is
+settled against that live state first. Run on 2026-11-24, twice.
+
+| Block | What the validators did | What the verifier says |
+|---|---|---|
+| Honest | Rooted, with the block id the crate computes. Its transfer executed. | A proof under the real certificate from a later footer verifies (1,742 bytes). |
+| Header split over two shreds, then an UpdateParent naming the header's own parent | Rooted. Replay started at the marker: the transfer after it executed, the one before it did not. | Refuses the block: no header where a validator looks. |
+| UpdateParent to an older ancestor | Shreds inserted, slot never completed, marked dead, in four attempts. Not root-caused; the single-process oracle votes for the same shape, where the root never advances. | Refuses the block. |
+| Zero parent id | Not constructible: the parent would have to be slot 0, and injection starts after the cluster is up. | Refuses the block. |
+
+The second row is the split-header attack on validators that voted for it:
+a finalized block with a transaction in it that never ran, and header and
+block id in agreement. Before the fix the verifier accepted that
+transaction. An injected block that arrives a moment late is inserted and
+replayable and still not finalized, because the slot was already skipped; the
+tool retries at the next leader window.
+
+```sh
+cd tools/agave-fixtures
+cargo run --release --bin cluster-inject -- ../../inject     # about 10 minutes
+```
+
 A block built directly on the cluster's first block has a parent id of all
 zeros, and nothing in it can be proven (see `docs/DESIGN.md`). On a test
 validator that is the first block or two. Send transactions after that.
