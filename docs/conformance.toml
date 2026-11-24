@@ -1,0 +1,1370 @@
+# Every check an Agave v4.4.1 validator applies between "a data shred arrives"
+# and "a transaction in that block is treated as executed in a finalized
+# block", and what the verifier does about each.
+#
+# status:
+#   enforced    the verifier applies the same rule or a stricter one; `test`
+#               names the test that shows it.
+#   implied     the verifier does not check it and does not need to; `premise`
+#               names the fact that makes that safe.
+#   documented  not a check the verifier can make; the docs say what it means.
+#   planned     the verifier should enforce it and does not yet; `test` names
+#               the test that will show it.
+#   na          not a rule about what is in a block.
+#
+# Agave paths are relative to the Agave repository at tag v4.4.1. This file is
+# the source; docs/CONFORMANCE.md is generated from it by
+# scripts/conformance.py, and tests/conformance_ledger.rs checks that every
+# test and premise named here exists.
+
+agave_tag = "v4.4.1"
+
+[[premise]]
+id = "votes-follow-replay"
+text = "Validators vote for a block only after replaying it without error, and at most 20% of stake is Byzantine. So a block that dies in replay, or is never replayed, is never finalized."
+note = "This is the trust assumption, not something the oracle can show. The oracle shows the other half: that Agave marks the slot dead."
+oracle_cases = []
+
+[[premise]]
+id = "dropped-shreds-never-complete"
+text = "A shred that the fetch filter or sanitize drops is never inserted, whether it arrived by turbine, by repair, or out of erasure recovery. A block that needs it never becomes full."
+oracle_cases = []
+
+[[premise]]
+id = "replay-from-zero"
+text = "With no UpdateParent, replay reads every shred from index 0."
+oracle_cases = []
+
+[[premise]]
+id = "component-parse-kills"
+text = "If any one component fails to parse, the slot dies."
+oracle_cases = []
+
+[[premise]]
+id = "every-batch-executed"
+text = "Every entry batch is executed. Nothing may follow the boundary tick."
+oracle_cases = []
+
+[[premise]]
+id = "every-transaction-commits-or-kills"
+text = "Every transaction in an executed batch is committed or kills the block. None is silently skipped."
+note = "Committed has three shapes; see rows 105 to 107."
+oracle_cases = []
+
+[[check]]
+id = 1
+layer = "shred-ingest"
+check = "Turbine and repair use separate filter modes"
+agave = "ledger/src/shred/filter.rs:261-266"
+error = ""
+consequence = "dropped"
+status = "na"
+note = "Not a rule about block content."
+
+[[check]]
+id = 2
+layer = "shred-ingest"
+check = "Packet shorter than the variant's payload"
+agave = "ledger/src/shred/filter.rs:267-270; ledger/src/shred/wire.rs:30-44"
+error = "index_overrun"
+consequence = "dropped"
+status = "enforced"
+test = "a_short_payload_is_not_a_shred_and_trailing_bytes_are_ignored"
+
+[[check]]
+id = 3
+layer = "shred-ingest"
+check = "Shred version differs from the cluster's"
+agave = "ledger/src/shred/filter.rs:276-287"
+error = "shred_version_mismatch"
+consequence = "dropped"
+status = "enforced"
+test = "a_shred_from_another_cluster_does_not_open_this_block"
+note = "The pinned version is rebuilt into the leaf; it is never taken from the proof."
+
+[[check]]
+id = 4
+layer = "shred-ingest"
+check = "Variant byte must be a known shred variant"
+agave = "ledger/src/shred/filter.rs:288-291; ledger/src/shred.rs:729-759"
+error = "bad_shred_type, InvalidShredVariant"
+consequence = "dropped"
+status = "enforced"
+test = "capacities_match_agave_constants"
+note = "Stricter: only 0x96 and 0xb6."
+
+[[check]]
+id = 5
+layer = "shred-ingest"
+check = "Slot no further than root + max(500, epoch/2)"
+agave = "ledger/src/shred/filter.rs:292-299, 469-478"
+error = "slot_out_of_range"
+consequence = "dropped"
+status = "na"
+note = "Ingest window, not block content."
+
+[[check]]
+id = 6
+layer = "shred-ingest"
+check = "Index and FEC set index readable"
+agave = "ledger/src/shred/filter.rs:305-312"
+error = "index_bad_deserialize, fec_set_index_bad_deserialize"
+consequence = "dropped"
+status = "enforced"
+test = "shreds_only_verify_where_they_really_are"
+note = "Both are rebuilt from the position the proof claims."
+
+[[check]]
+id = 7
+layer = "shred-ingest"
+check = "Merkle proof size is 6 (SIMD-0317)"
+agave = "ledger/src/shred/filter.rs:313-322, 448-466"
+error = "invalid_proof_size"
+consequence = "dropped once enforced"
+status = "enforced"
+test = "path_len_matches_agave"
+note = "Stricter: the layout assumes 32:32 sets."
+
+[[check]]
+id = 8
+layer = "shred-ingest"
+check = "Data shred index below the per-slot maximum (32,768)"
+agave = "ledger/src/shred/filter.rs:346-349; ledger/src/shred/shred_data.rs:19-24"
+error = "index_out_of_bounds, InvalidShredIndex"
+consequence = "dropped"
+status = "enforced"
+test = "a_block_cannot_claim_more_fec_sets_than_consensus_allows"
+note = "Through the FEC set cap of 1,024. Firedancer applies the slot-time-aware cap (16,384 shreds at 200 ms)."
+
+[[check]]
+id = 9
+layer = "shred-ingest"
+check = "Parent offset readable; slot minus offset does not underflow"
+agave = "ledger/src/shred/filter.rs:350-357"
+error = "bad_parent_offset"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+
+[[check]]
+id = 10
+layer = "shred-ingest"
+check = "Parent offset 0 is invalid except in slot 0"
+agave = "ledger/src/shred/traits.rs:41-55"
+error = "InvalidParentOffset"
+consequence = "rejected at sanitize"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+
+[[check]]
+id = 11
+layer = "shred-ingest"
+check = "root <= shred parent < slot"
+agave = "ledger/src/shred/filter.rs:358-361; ledger/src/blockstore.rs:6725-6732"
+error = "slot_out_of_range"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "The verifier checks only parent slot < child slot, from the tree."
+
+[[check]]
+id = 12
+layer = "shred-ingest"
+check = "Flags parse"
+agave = "ledger/src/shred/wire.rs:133-143; ledger/src/shred/filter.rs:363-366"
+error = "shred_flags_bad_deserialize"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "All eight bits are defined."
+
+[[check]]
+id = 13
+layer = "shred-ingest"
+check = "DATA_COMPLETE only on the last data shred of a FEC set"
+agave = "ledger/src/shred/filter.rs:368-376"
+error = "unexpected_data_complete_shred"
+consequence = "dropped, also after recovery (filter.rs:549-565)"
+status = "planned"
+test = "data_complete_is_only_honoured_at_the_end_of_a_fec_set"
+note = "Today the verifier follows the flag anywhere, a superset. Plan task T5b makes it refuse."
+
+[[check]]
+id = 14
+layer = "shred-ingest"
+check = "LAST_IN_SLOT only where (index + 1) % 32 == 0"
+agave = "ledger/src/shred/filter.rs:378-383, 500-502"
+error = "misaligned_last_data_index"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+
+[[check]]
+id = 15
+layer = "shred-ingest"
+check = "Flag bit 0x80 without 0x40 is invalid"
+agave = "ledger/src/shred/shred_data.rs:25-30"
+error = "InvalidShredFlags"
+consequence = "rejected"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "The verifier tests bit 0x40, as Agave's `contains` does."
+
+[[check]]
+id = 16
+layer = "shred-ingest"
+check = "88 <= size <= 88 + capacity"
+agave = "ledger/src/shred/merkle.rs:74-90; ledger/src/shred/filter.rs:386-391"
+error = "InvalidDataSize, invalid_data_size"
+consequence = "dropped"
+status = "enforced"
+test = "size_bounds_follow_the_validator"
+
+[[check]]
+id = 17
+layer = "shred-ingest"
+check = "fec_set_index <= index < fec_set_index + 32, and fec_set_index % 32 == 0"
+agave = "ledger/src/shred/filter.rs:395-398, 484-492"
+error = "misaligned_fec_set"
+consequence = "dropped"
+status = "enforced"
+test = "shreds_only_verify_where_they_really_are"
+note = "Derived from the claimed position."
+
+[[check]]
+id = 18
+layer = "shred-ingest"
+check = "Coding shreds: index bound, slot above root, 32:32 erasure config"
+agave = "ledger/src/shred/filter.rs:325-344"
+error = "misaligned_erasure_config"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "The verifier uses only the coding subtree's root."
+
+[[check]]
+id = 19
+layer = "shred-ingest"
+check = "Payload length, header decode, Merkle data variant"
+agave = "ledger/src/shred/merkle.rs:438-459"
+error = "InvalidPayloadSize, InvalidShredVariant"
+consequence = "silently dropped (core/src/window_service.rs:201)"
+status = "enforced"
+test = "a_short_payload_is_not_a_shred_and_trailing_bytes_are_ignored"
+
+[[check]]
+id = 20
+layer = "shred-ingest"
+check = "Merkle proof and erasure shard index present"
+agave = "ledger/src/shred/merkle.rs:473-480; ledger/src/shred/shred_data.rs:5-10"
+error = "InvalidErasureShardIndex"
+consequence = "rejected"
+status = "enforced"
+test = "wrong_length_paths_are_rejected"
+
+[[check]]
+id = 21
+layer = "shred-ingest"
+check = "Turbine dedup"
+agave = "turbine/src/sigverify_shreds.rs:187-199"
+error = "num_duplicates"
+consequence = "dropped"
+status = "na"
+
+[[check]]
+id = 22
+layer = "shred-ingest"
+check = "Slot leader known and not self"
+agave = "turbine/src/sigverify_shreds.rs:438-460"
+error = ""
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+
+[[check]]
+id = 23
+layer = "shred-ingest"
+check = "Leader's Ed25519 signature over the FEC set's Merkle root"
+agave = "ledger/src/sigverify_shreds.rs:21-70"
+error = ""
+consequence = "dropped"
+status = "implied"
+premise = "votes-follow-replay"
+note = "The signature is outside the leaf. The block id and the certificate over it take its place."
+
+[[check]]
+id = 24
+layer = "shred-ingest"
+check = "Retransmitter signature on resigned shreds"
+agave = "turbine/src/sigverify_shreds.rs:310-416"
+error = "num_invalid_retransmitter"
+consequence = "dropped where the feature is active"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "Outside the leaf."
+
+[[check]]
+id = 25
+layer = "shred-ingest"
+check = "Nodes re-sign the retransmitter field on each hop"
+agave = "turbine/src/sigverify_shreds.rs:357; ledger/src/shred/wire.rs:285-300"
+error = ""
+consequence = "bytes differ per node"
+status = "enforced"
+test = "resigned_shreds_verify_too"
+note = "Ignored: the field is not in the leaf and not in a proof."
+
+[[check]]
+id = 26
+layer = "shred-ingest"
+check = "Recovery: inputs re-filtered, one signature per set, outputs re-filtered"
+agave = "ledger/src/shred/filter.rs:549-565; ledger/src/shred/merkle.rs"
+error = "InvalidMerkleRoot"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "Read in source, not run. Plan task T9 runs it."
+
+[[check]]
+id = 27
+layer = "shred-ingest"
+check = "Recovered shreds copy the chained root from a coding shred"
+agave = "ledger/src/shred/merkle.rs:386-399"
+error = ""
+consequence = "a set with mixed chained roots cannot be recovered"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "The proof format carries one chained root per set. Liveness only."
+
+[[check]]
+id = 28
+layer = "blockstore"
+check = "Shred already present"
+agave = "ledger/src/blockstore.rs:3012-3014, 3148-3152, 299-315"
+error = "InsertDataShredError::Exists"
+consequence = "dropped; duplicate proof; slot may be marked dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 29
+layer = "blockstore"
+check = "Index at or past the last index"
+agave = "ledger/src/blockstore.rs:3413-3460"
+error = "LastIndexConflict"
+consequence = "dropped, duplicate proof"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 30
+layer = "blockstore"
+check = "LAST_IN_SLOT below what was already received"
+agave = "ledger/src/blockstore.rs:3463-3509"
+error = "LastIndexConflict"
+consequence = "dropped"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 31
+layer = "blockstore"
+check = "parent() ok and root <= parent < slot"
+agave = "ledger/src/blockstore.rs:2982-2984, 3511-3521"
+error = "InvalidShred"
+consequence = "dropped"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+
+[[check]]
+id = 32
+layer = "blockstore"
+check = "Every data shred carries the same shred-header parent"
+agave = "ledger/src/blockstore.rs:3523-3613"
+error = ""
+consequence = "dropped; slot never completes"
+status = "implied"
+premise = "dropped-shreds-never-complete"
+note = "The verifier never reads the parent offset."
+
+[[check]]
+id = 33
+layer = "blockstore"
+check = "All shreds of a FEC set share one Merkle root"
+agave = "ledger/src/blockstore.rs:3188-3250"
+error = "MerkleRootConflict"
+consequence = "dropped, duplicate proof"
+status = "enforced"
+test = "shreds_of_one_block_do_not_open_another"
+note = "Every opened shred must hash to the same block id."
+
+[[check]]
+id = 34
+layer = "blockstore"
+check = "FEC set k chains to set k-1's root"
+agave = "ledger/src/blockstore.rs:1906-1970, 3264-3390"
+error = "FixedFECChainedMerkleRootConflict"
+consequence = "ignored once Alpenglow is active (blockstore.rs:290-295)"
+status = "documented"
+note = "The chained root is leader-chosen bytes, committed by the leaf and checked by nobody. Said so on FecSetProof::chained_root."
+
+[[check]]
+id = 35
+layer = "blockstore"
+check = "Cross-slot chained block id"
+agave = "ledger/src/blockstore_processor.rs:2316-2356"
+error = "ChainedBlockIdFailure"
+consequence = "inactive for double-Merkle slots"
+status = "na"
+
+[[check]]
+id = 36
+layer = "blockstore"
+check = "Block header parsed from shred 0 alone, trailing bytes allowed"
+agave = "ledger/src/blockstore.rs:555-576, 1326-1327"
+error = ""
+consequence = "silently no header"
+status = "enforced"
+test = "a_header_split_across_shreds_does_not_hide_an_abandoned_prefix"
+note = "Firedancer agrees (fd_repair.c L923-925) and goes further: no whole header in shred 0 invalidates the slot."
+
+[[check]]
+id = 37
+layer = "blockstore"
+check = "UpdateParent parsed only from the first shred of a FEC set whose predecessor is DATA_COMPLETE"
+agave = "ledger/src/blockstore.rs:1247-1306"
+error = ""
+consequence = "silently not recognised; replay then hits AbandonedBank"
+status = "enforced"
+test = "a_transaction_in_an_abandoned_block_prefix_is_not_included"
+note = "The verifier refuses whenever header and tree disagree, so it never needs to recognise the marker."
+
+[[check]]
+id = 38
+layer = "blockstore"
+check = "UpdateParent only in the first slot of a leader window"
+agave = "ledger/src/blockstore.rs:620-626"
+error = "UpdateParentNotFirstInLeaderWindow"
+consequence = "slot dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 39
+layer = "blockstore"
+check = "root <= marker parent < slot"
+agave = "ledger/src/blockstore.rs:644-651"
+error = "InvalidParentInfo"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 40
+layer = "blockstore"
+check = "Header parent slot equals shred parent slot"
+agave = "ledger/src/blockstore.rs:653-659"
+error = "BlockHeaderParentMismatch"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 41
+layer = "blockstore"
+check = "UpdateParent slot <= shred parent"
+agave = "ledger/src/blockstore.rs:661-667"
+error = "UpdateParentSlotGreaterThanShredParent"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 42
+layer = "blockstore"
+check = "Two differing headers, or two differing UpdateParents"
+agave = "ledger/src/blockstore.rs:594-598"
+error = "BlockComponentMismatch, MultipleUpdateParents"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 43
+layer = "blockstore"
+check = "UpdateParent must not name the header's own parent"
+agave = "ledger/src/blockstore.rs:601-604"
+error = "UpdateParentMatchesBlockHeader"
+consequence = "dead"
+status = "planned"
+test = "a_zero_parent_id_does_not_hide_an_abandoned_prefix"
+note = "The rule the header check stands on. It is skipped when the header's parent id is all zeros (blockstore.rs:542-551), reachable only with parent slot 0. Plan task T5b refuses that header."
+
+[[check]]
+id = 44
+layer = "blockstore"
+check = "UpdateParent slot <= header slot"
+agave = "ledger/src/blockstore.rs:606-610"
+error = "UpdateParentSlotGreaterThanBlockHeader"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 45
+layer = "blockstore"
+check = "A component ends at each shred flagged DATA_COMPLETE or LAST_IN_SLOT"
+agave = "ledger/src/blockstore.rs:6353-6424"
+error = ""
+consequence = ""
+status = "enforced"
+test = "the_component_boundary_flag_cannot_be_forged"
+
+[[check]]
+id = 46
+layer = "blockstore"
+check = "Full when consumed == last_index + 1"
+agave = "ledger/src/blockstore_meta.rs:587-614"
+error = "SlotNotFull"
+consequence = ""
+status = "enforced"
+test = "duplicated_last_leaf_is_not_a_second_leaf"
+note = "The FEC set count in the parent leaf commits the size."
+
+[[check]]
+id = 47
+layer = "blockstore"
+check = "Block id: FEC roots then the parent leaf, using the final parent"
+agave = "ledger/src/blockstore.rs:2005, 2031-2081"
+error = "ParentInfoUnavailable, MissingMerkleRoot"
+consequence = ""
+status = "enforced"
+test = "block_ids_match_the_blockstore"
+note = "Firedancer's compute_dmr builds the same tree."
+
+[[check]]
+id = 48
+layer = "blockstore"
+check = "No header in shred 0 and no UpdateParent: the block is never replayed"
+agave = "core/src/replay_stage/update_parent.rs:77-88"
+error = "ChildBankReplayStart::Defer"
+consequence = "never replayed"
+status = "enforced"
+test = "a_header_split_across_shreds_does_not_hide_an_abandoned_prefix"
+
+[[check]]
+id = 49
+layer = "blockstore"
+check = "Block-id repair: parent leaf at index count, exact proof length, 1 <= count <= 1024"
+agave = "core/src/repair/serve_repair.rs:318-392"
+error = "response rejected"
+consequence = ""
+status = "enforced"
+test = "a_block_cannot_claim_more_fec_sets_than_consensus_allows"
+note = "The same checks as ParentLink::verify."
+
+[[check]]
+id = 50
+layer = "blockstore"
+check = "Dead slot"
+agave = "ledger/src/blockstore.rs:4963-4968"
+error = "BlockstoreError::DeadSlot"
+consequence = "replay stops"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 51
+layer = "component"
+check = "Components are read from the replay start, only below `consumed`"
+agave = "ledger/src/blockstore.rs:5149-5174"
+error = ""
+consequence = ""
+status = "enforced"
+test = "the_component_boundary_flag_cannot_be_forged"
+
+[[check]]
+id = 52
+layer = "component"
+check = "Missing shred inside a range"
+agave = "ledger/src/blockstore.rs:5213-5222"
+error = "MissingShred"
+consequence = "dead"
+status = "enforced"
+test = "incomplete_proofs_are_refused"
+
+[[check]]
+id = 53
+layer = "component"
+check = "Deshred: consecutive shreds, nothing after DATA_COMPLETE, last is DATA_COMPLETE"
+agave = "ledger/src/shredder.rs:200-243"
+error = "InvalidDeshredSet, TooFewDataShards"
+consequence = "dead"
+status = "enforced"
+test = "incomplete_proofs_are_refused"
+
+[[check]]
+id = 54
+layer = "component"
+check = "A component of only empty shreds"
+agave = "ledger/src/shredder.rs:233-241"
+error = "parse error"
+consequence = "dead"
+status = "implied"
+premise = "component-parse-kills"
+
+[[check]]
+id = 55
+layer = "component"
+check = "At least 8 bytes"
+agave = "entry/src/block_component_parser.rs:22-23"
+error = "ParseError::EntryCount"
+consequence = "dead"
+status = "enforced"
+test = "reachable_reaches_exactly_what_transaction_at_does"
+
+[[check]]
+id = 56
+layer = "component"
+check = "Exactly 8 zero bytes means the leader aborted the block"
+agave = "entry/src/block_component.rs:592-597; ledger/src/blockstore.rs:5272-5285"
+error = "BlockstoreError::BlockAborted"
+consequence = "dead"
+status = "enforced"
+test = "entry_batch_is_not_a_marker_and_vice_versa"
+note = "A count of zero is never walked as a batch."
+
+[[check]]
+id = 57
+layer = "component"
+check = "Entry count 0 means a marker, which must parse"
+agave = "entry/src/block_component_parser.rs:26-31"
+error = "ParseError::BlockMarker"
+consequence = "dead"
+status = "enforced"
+test = "entry_batch_is_not_a_marker_and_vice_versa"
+
+[[check]]
+id = 58
+layer = "component"
+check = "Entry count below u32::MAX"
+agave = "entry/src/block_component_parser.rs:36-41"
+error = "TooManyEntries"
+consequence = "dead"
+status = "implied"
+premise = "component-parse-kills"
+
+[[check]]
+id = 59
+layer = "component"
+check = "Entry count within the preallocation limit"
+agave = "entry/src/block_component_parser.rs:46-52, 185-195"
+error = "EntryCountPreallocLimit"
+consequence = "dead"
+status = "implied"
+premise = "component-parse-kills"
+note = "The verifier walks only to the claimed position and allocates nothing by count."
+
+[[check]]
+id = 60
+layer = "component"
+check = "Each entry header complete"
+agave = "entry/src/block_component_parser.rs:61-83"
+error = "EntryHeader"
+consequence = "dead"
+status = "enforced"
+test = "reachable_reaches_exactly_what_transaction_at_does"
+
+[[check]]
+id = 61
+layer = "component"
+check = "Transaction count within the preallocation limit"
+agave = "entry/src/block_component_parser.rs:95-102"
+error = "TransactionCountPreallocLimit"
+consequence = "dead"
+status = "implied"
+premise = "component-parse-kills"
+
+[[check]]
+id = 62
+layer = "component"
+check = "Transaction framing, by agave-transaction-view"
+agave = "entry/src/block_component_parser.rs:107-116"
+error = "ParseError::Transaction"
+consequence = "dead"
+status = "enforced"
+test = "every_agave_transaction_is_provable_and_parses_identically"
+note = "For everything the view accepts the verifier consumes the same length. The fuzz target transaction_view checks that continuously."
+
+[[check]]
+id = 63
+layer = "component"
+check = "Bytes after the last entry are ignored"
+agave = "entry/src/block_component_parser.rs:127-129"
+error = ""
+consequence = "silently ignored"
+status = "enforced"
+test = "transaction_at_finds_exactly_the_indexed_one"
+note = "The walk is bounded by the entry count."
+
+[[check]]
+id = 64
+layer = "component"
+check = "Bytes after a marker are ignored"
+agave = "entry/src/block_component_parser.rs:29"
+error = ""
+consequence = "silently ignored"
+status = "enforced"
+test = "header_and_update_parent_round_trip"
+
+[[check]]
+id = 65
+layer = "component"
+check = "Marker version 1, kind 0..3, inner version 1"
+agave = "entry/src/block_component.rs:383-411, 459-464"
+error = "wincode error"
+consequence = "dead"
+status = "enforced"
+test = "markers_with_unknown_versions_or_kinds_are_refused"
+
+[[check]]
+id = 66
+layer = "component"
+check = "Length-prefixed marker body: inner size equals the prefix"
+agave = "entry/src/block_component.rs:190-205"
+error = "LengthPrefixed mismatch"
+consequence = "dead"
+status = "enforced"
+test = "footer_is_read_to_its_end_like_a_validator_reads_it"
+note = "Header, UpdateParent and footer are read exactly. The GenesisCertificate marker is recognised and not parsed; nothing is ever proven from it."
+
+[[check]]
+id = 67
+layer = "component"
+check = "Footer layout, with reward certificates"
+agave = "entry/src/block_component.rs:240-249, 324-330; votor-messages/src/reward_certificate.rs:34-99"
+error = "wincode error"
+consequence = "dead"
+status = "enforced"
+test = "footer_is_read_to_its_end_like_a_validator_reads_it"
+
+[[check]]
+id = 68
+layer = "state-machine"
+check = "No markers before the Alpenglow migration"
+agave = "runtime/src/block_component_processor.rs:337-343, 461-462"
+error = "BlockComponentPreMigration"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 69
+layer = "state-machine"
+check = "The first Alpenglow block carries the GenesisCertificate marker"
+agave = "runtime/src/block_component_processor.rs:345-368"
+error = "MissingGenesisCertificateMarker"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 70
+layer = "state-machine"
+check = "Genesis marker only right after the header, verified"
+agave = "runtime/src/block_component_processor.rs:204-217, 501-591"
+error = "GenesisCertificate*"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 71
+layer = "state-machine"
+check = "Nothing before the parent marker"
+agave = "runtime/src/block_component_processor.rs:206, 223, 279, 293"
+error = "MissingParentMarker"
+consequence = "dead"
+status = "enforced"
+test = "incomplete_proofs_are_refused"
+note = "A header in shred 0 is required and the claim's component cannot be component 0."
+
+[[check]]
+id = 72
+layer = "state-machine"
+check = "One header; no header after an UpdateParent"
+agave = "runtime/src/block_component_processor.rs:185-201"
+error = "MultipleBlockHeaders, SpuriousUpdateParent"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 73
+layer = "state-machine"
+check = "Header parent slot equals the bank's parent"
+agave = "runtime/src/block_component_processor.rs:684-699"
+error = "HeaderParentSlotMismatch"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 74
+layer = "state-machine"
+check = "UpdateParent needs the fast-leader-handover feature and the first slot of a window"
+agave = "runtime/src/block_component_processor.rs:453-459, 701-713, 246-249"
+error = "SpuriousUpdateParent, UnexpectedInitialUpdateParent"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+note = "The feature is not active on mainnet as of 2026-11-24."
+
+[[check]]
+id = 75
+layer = "state-machine"
+check = "UpdateParent after the header or entries restarts replay at the marker"
+agave = "runtime/src/block_component_processor.rs:255-265; core/src/replay_stage/update_parent.rs:337-425"
+error = "AbandonedBank"
+consequence = "replay restarts, or dead"
+status = "enforced"
+test = "a_transaction_in_an_abandoned_block_prefix_is_not_included"
+note = "Refused outright."
+
+[[check]]
+id = 76
+layer = "state-machine"
+check = "Second UpdateParent; UpdateParent after the footer"
+agave = "runtime/src/block_component_processor.rs:266-271"
+error = "MultipleUpdateParents, SpuriousUpdateParent"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 77
+layer = "state-machine"
+check = "Only one footer"
+agave = "runtime/src/block_component_processor.rs:284-286"
+error = "MultipleBlockFooters"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+note = "With row 78 this rules out a decoy footer."
+
+[[check]]
+id = 78
+layer = "state-machine"
+check = "No entry batch after the footer except the final tick"
+agave = "runtime/src/block_component_processor.rs:221-235"
+error = "EntryBatchAfterBlockFooter"
+consequence = "dead"
+status = "implied"
+premise = "every-batch-executed"
+note = "The verifier does not check that a claim lies between header and footer. It does not need to."
+
+[[check]]
+id = 79
+layer = "state-machine"
+check = "Final tick: last component, one tick entry, after the footer"
+agave = "runtime/src/block_component_processor.rs:386-397, 291-306"
+error = "InvalidAlpentickPosition"
+consequence = "dead"
+status = "implied"
+premise = "every-batch-executed"
+
+[[check]]
+id = 80
+layer = "state-machine"
+check = "The block must end in the done state"
+agave = "runtime/src/block_component_processor.rs:309-319"
+error = "MissingBlockFooter"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 81
+layer = "state-machine"
+check = "Clock: after the parent's, at most twice the elapsed slot time ahead"
+agave = "runtime/src/block_component_processor.rs:715-781"
+error = "NanosecondClockOutOfBounds"
+consequence = "dead"
+status = "documented"
+note = "Bounded against the parent only, never against real time. Said so on Footer::producer_time_nanos."
+
+[[check]]
+id = 82
+layer = "state-machine"
+check = "Reward certificates: slots, base-2, signature; no stake threshold"
+agave = "runtime/src/validated_reward_certificate.rs:41-142"
+error = "InvalidRewardCerts"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+note = "Read past, never used."
+
+[[check]]
+id = 83
+layer = "state-machine"
+check = "A footer's finality certificate must be valid"
+agave = "runtime/src/block_component_processor.rs:626-631"
+error = "InvalidFinalizationCertificate"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+note = "Returned to the caller unverified."
+
+[[check]]
+id = 84
+layer = "state-machine"
+check = "Scheduler drained before the footer changes state"
+agave = "runtime/src/block_component_processor.rs:645-649"
+error = "TransactionExecution"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 85
+layer = "state-machine"
+check = "Vote-reward state update"
+agave = "runtime/src/block_component_processor.rs:783-797"
+error = "UpdateBankFooter"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 86
+layer = "state-machine"
+check = "Footer bank hash equals the computed bank hash"
+agave = "runtime/src/block_component_processor.rs:798-801; runtime/src/bank.rs:3271-3281"
+error = "BankHashMismatch"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 87
+layer = "state-machine"
+check = "A finalized block whose local bank hash differs"
+agave = "votor/src/event_handler.rs:942-962"
+error = "panic"
+consequence = "validator halts"
+status = "na"
+
+[[check]]
+id = 88
+layer = "state-machine"
+check = "Errors before an UpdateParent are recoverable"
+agave = "runtime/src/block_component_processor.rs:115-143; core/src/replay_stage/dead_slots.rs:117-202"
+error = ""
+consequence = "soft dead"
+status = "na"
+note = "Why a prefix can hold anything at all."
+
+[[check]]
+id = 89
+layer = "entries"
+check = "Every entry has num_hashes == 1"
+agave = "ledger/src/blockstore_processor.rs:551-561"
+error = "InvalidTickHashCount"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 90
+layer = "entries"
+check = "Exactly one tick per block"
+agave = "ledger/src/blockstore_processor.rs:525-531"
+error = "TooManyTicks"
+consequence = "dead"
+status = "implied"
+premise = "every-batch-executed"
+note = "The verifier walks past empty entries."
+
+[[check]]
+id = 91
+layer = "entries"
+check = "Nothing after the boundary tick"
+agave = "ledger/src/blockstore_processor.rs:533-548"
+error = "TooFewTicks, TrailingEntry, InvalidLastTick"
+consequence = "dead"
+status = "implied"
+premise = "every-batch-executed"
+note = "The guard that stops process_entries' tick break (212-217) from skipping entries."
+
+[[check]]
+id = 92
+layer = "entries"
+check = "Hash chain from the parent's last blockhash, across components"
+agave = "ledger/src/blockstore_processor.rs:1644-1659; entry/src/entry.rs:175-191"
+error = "InvalidEntryHash"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 93
+layer = "entries"
+check = "Bank complete at the end"
+agave = "ledger/src/blockstore_processor.rs:620-624"
+error = "BlockError::Incomplete"
+consequence = "dead"
+status = "implied"
+premise = "votes-follow-replay"
+
+[[check]]
+id = 94
+layer = "transactions"
+check = "Size limits (1,232 bytes; 4,096 for v1)"
+agave = "runtime/src/bank.rs:5774-5785"
+error = "SanitizeFailure"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 95
+layer = "transactions"
+check = "Sanitize"
+agave = "runtime/src/bank.rs:5787-5789"
+error = "SanitizeFailure"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 96
+layer = "transactions"
+check = "At least as many static keys as required signers"
+agave = "entry/src/entry.rs:479-483"
+error = "SanitizeFailure"
+consequence = "dead"
+status = "enforced"
+test = "a_transaction_with_more_signatures_than_keys_is_not_one"
+
+[[check]]
+id = 97
+layer = "transactions"
+check = "Compute-budget and precompile metadata"
+agave = "runtime-transaction/src/runtime_transaction/transaction_view.rs:94-120"
+error = "TransactionError"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 98
+layer = "transactions"
+check = "Address lookup table resolution"
+agave = "runtime/src/bank.rs:5809, 5826-5838"
+error = "AddressLookupTable*"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+note = "The verifier exposes static keys only."
+
+[[check]]
+id = 99
+layer = "transactions"
+check = "Reserved keys"
+agave = "runtime/src/bank.rs:5811-5815"
+error = "SanitizeFailure"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 100
+layer = "transactions"
+check = "Ed25519 signatures"
+agave = "entry/src/entry.rs:260-278; ledger/src/blockstore_processor.rs:1698-1709"
+error = "SignatureFailure"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+note = "The verifier never checks a transaction signature."
+
+[[check]]
+id = 101
+layer = "transactions"
+check = "Account lock count and duplicates"
+agave = "ledger/src/blockstore_processor.rs:249-258"
+error = "TooManyAccountLocks, AccountLoadedTwice"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 102
+layer = "transactions"
+check = "Lock conflicts inside an entry"
+agave = "unified-scheduler-pool/src/lib.rs:1181-1189"
+error = ""
+consequence = "no longer an error"
+status = "na"
+
+[[check]]
+id = 103
+layer = "transactions"
+check = "A user transaction in a vote-only bank"
+agave = "ledger/src/blockstore_processor.rs:1724-1733"
+error = "UserTransactionsInVoteOnlyBank"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 104
+layer = "transactions"
+check = "Any unprocessable result: unknown blockhash, already processed, bad nonce, fee payer"
+agave = "svm/src/transaction_processor.rs:555-557; runtime/src/transaction_execution.rs:73-76, 200-232"
+error = "the error itself"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+
+[[check]]
+id = 105
+layer = "transactions"
+check = "Fees-only: accounts fail to load"
+agave = "svm/src/transaction_processor.rs:571-580"
+error = "status Err"
+consequence = "committed, fee charged, nothing run"
+status = "documented"
+note = "Said on VerifiedTransaction."
+
+[[check]]
+id = 106
+layer = "transactions"
+check = "No-op under SIMD-0290: fee payer cannot pay"
+agave = "svm/src/transaction_processor.rs:559-569, 805-829"
+error = "status Err"
+consequence = "committed, no fee, nothing run"
+status = "documented"
+note = "Finding C1. A proof cannot tell this apart. Said on VerifiedTransaction and in DESIGN.md."
+
+[[check]]
+id = 107
+layer = "transactions"
+check = "Executed with an instruction error"
+agave = ""
+error = "status Err"
+consequence = "committed, fee charged, state rolled back"
+status = "documented"
+note = "Said on VerifiedTransaction."
+
+[[check]]
+id = 108
+layer = "transactions"
+check = "Cost limits"
+agave = "runtime/src/transaction_execution.rs:88-99, 152-168"
+error = "WouldExceed*"
+consequence = "dead"
+status = "implied"
+premise = "every-transaction-commits-or-kills"
+note = "No transaction is dropped for cost in replay."
+
+[[check]]
+id = 109
+layer = "transactions"
+check = "Entry-bytes budget"
+agave = "runtime/src/bank/entry_bytes_budget.rs"
+error = ""
+consequence = "leader side only"
+status = "na"
+
+[[check]]
+id = 110
+layer = "transactions"
+check = "Leaders drop no-ops; replay does not"
+agave = "core/src/banking_stage/consumer.rs:369; runtime/src/bank.rs:4040-4053"
+error = ""
+consequence = "a block may legally carry them"
+status = "documented"
+note = "Feeds C1."
+
+[[check]]
+id = 111
+layer = "finality"
+check = "Thresholds: 60% notarize and finalize, 80% fast"
+agave = "votor-messages/src/certificate.rs:113-122; bls-cert-verify/src/cert_verify.rs:133-150"
+error = "NotEnoughStake"
+consequence = "rejected"
+status = "enforced"
+test = "thresholds_are_inclusive_and_exact"
+
+[[check]]
+id = 112
+layer = "finality"
+check = "Base-2 bitmaps only for these certificates"
+agave = "bls-cert-verify/src/cert_verify.rs:157-171"
+error = "WrongEncoding"
+consequence = "rejected"
+status = "enforced"
+test = "bitmap_rejects_what_validators_reject"
+
+[[check]]
+id = 113
+layer = "finality"
+check = "Bitmap decoded against the rank map's size"
+agave = "bls-cert-verify/src/cert_verify.rs:163, 262-271"
+error = "Decode, MissingRank"
+consequence = "rejected"
+status = "enforced"
+test = "the_bitmap_cannot_claim_more_than_signed"
+
+[[check]]
+id = 114
+layer = "finality"
+check = "Aggregate signature over possession-checked keys"
+agave = "bls-cert-verify/src/cert_verify.rs:173-183, 247-259"
+error = "VerifySig"
+consequence = "rejected"
+status = "enforced"
+test = "certificate_verdicts_match_agaves_verifier"
+
+[[check]]
+id = 115
+layer = "finality"
+check = "Stake set is that of the epoch of the certificate's slot"
+agave = "runtime/src/bank.rs:2539-2542, 6071-6096"
+error = "MissingRankMap"
+consequence = "rejected"
+status = "enforced"
+test = "certificates_are_bound_to_their_epochs_validators"
+note = "Observed on a four-validator cluster; see LOCAL-VALIDATOR.md."
+
+[[check]]
+id = 116
+layer = "finality"
+check = "Footer certificate: decompress, verify each part, base-3 refused"
+agave = "runtime/src/validated_block_finalization.rs:88-171, 368-409"
+error = "BlockFinalizationCertError"
+consequence = "carrier block dead"
+status = "enforced"
+test = "certificate_verdicts_match_agaves_verifier"
+
+[[check]]
+id = 117
+layer = "finality"
+check = "Slow is finalize(slot) plus notarize(block); fast is notarize at 80%"
+agave = "runtime/src/validated_block_finalization.rs:98-170; votor/src/consensus_pool.rs:184-227"
+error = ""
+consequence = ""
+status = "enforced"
+test = "finalize_votes_do_not_choose_a_block"
+
+[[check]]
+id = 118
+layer = "finality"
+check = "A footer's certificate is not tied to ancestry or to an earlier slot"
+agave = "runtime/src/validated_block_finalization.rs:88-171"
+error = ""
+consequence = "any certifiable block is accepted"
+status = "documented"
+note = "Finding C3. Said on Footer::finality."
+
+[[check]]
+id = 119
+layer = "finality"
+check = "Footer certificates are forwarded only from the penultimate FEC set"
+agave = "ledger/src/blockstore.rs:6304-6345"
+error = ""
+consequence = "otherwise skipped"
+status = "na"
+
+[[check]]
+id = 120
+layer = "finality"
+check = "Consensus messages: shred version, slot window"
+agave = "bls-sigverify/src/bls_sigverifier.rs:345-410"
+error = "cert_too_far_in_future"
+consequence = "dropped"
+status = "na"
+
+[[check]]
+id = 121
+layer = "malleable"
+check = "Leader signature (bytes 0..64) is outside the leaf"
+agave = "ledger/src/shred/merkle.rs:191-203"
+error = ""
+consequence = ""
+status = "enforced"
+test = "every_agave_transaction_is_provable_and_parses_identically"
+note = "Not in a proof at all."
+
+[[check]]
+id = 122
+layer = "malleable"
+check = "Retransmitter signature is re-signed on every hop"
+agave = "turbine/src/sigverify_shreds.rs:357"
+error = ""
+consequence = ""
+status = "enforced"
+test = "resigned_shreds_verify_too"
+
+[[check]]
+id = 123
+layer = "malleable"
+check = "The in-shred Merkle proof is outside the leaf"
+agave = "ledger/src/shred/merkle.rs:295-310"
+error = ""
+consequence = ""
+status = "enforced"
+test = "agave_shreds_reject_tampering"
+note = "Recomputed, never trusted."
+
+[[check]]
+id = 124
+layer = "malleable"
+check = "Packet bytes after the shred (repair nonce)"
+agave = "ledger/src/shred/wire.rs:38-62"
+error = ""
+consequence = ""
+status = "enforced"
+test = "a_short_payload_is_not_a_shred_and_trailing_bytes_are_ignored"
+
+[[check]]
+id = 125
+layer = "malleable"
+check = "Body bytes past `size` are in the leaf and are not data"
+agave = ""
+error = ""
+consequence = ""
+status = "enforced"
+test = "data_is_zero_extended_to_size"
+
+[[check]]
+id = 126
+layer = "malleable"
+check = "Reference tick bits and chained root are in the leaf and never validated"
+agave = ""
+error = ""
+consequence = ""
+status = "enforced"
+test = "position_is_part_of_the_leaf"
+
+[[check]]
+id = 127
+layer = "malleable"
+check = "Bytes 20..32 of each FEC root and of the parent leaf do not enter the block id"
+agave = "ledger/src/shred/merkle_tree.rs"
+error = ""
+consequence = ""
+status = "documented"
+note = "The 20-byte truncation. See DESIGN.md, Merkle truncation."
+
+[[check]]
+id = 128
+layer = "malleable"
+check = "Original and alternate copies of a slot"
+agave = "ledger/src/blockstore.rs:411-415"
+error = ""
+consequence = ""
+status = "enforced"
+test = "shreds_of_one_block_do_not_open_another"
+note = "Different block ids."
