@@ -919,6 +919,64 @@ fn incomplete_proofs_are_refused() {
     );
 }
 
+/// The dishonest prover the other tests stand on: `RawBlock` opens any shreds
+/// under any claimed parent and checks nothing. Under the true parent it
+/// produces exactly the honest proof. Under any other, the block id it
+/// commits to is not the one validators certified.
+#[test]
+fn a_raw_opening_is_honest_only_under_the_true_parent() {
+    let w = world();
+    let parent = w.blocks[2].block();
+    let payloads = BlockBuilder::new(1010, parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![legacy_transaction(77, &[b"raw"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]))
+        .build();
+    let honest = BlockData::from_shreds(&payloads).unwrap();
+    let raw = RawBlock::from_shreds(&payloads).unwrap();
+    assert_eq!(raw.block(&parent), honest.block());
+    assert_eq!(
+        raw.component_starts(),
+        honest
+            .components()
+            .map(|(start, _)| start)
+            .collect::<Vec<_>>()
+    );
+
+    let cert = w.validators.fast_cert(
+        honest.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let proof = prover::prove(cert.clone(), &[&honest], &signature_for(77), false).unwrap();
+    let needed: BTreeSet<u32> = [0, 31, 32].into_iter().collect();
+    let by_hand = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: raw.open(&parent, &needed),
+        component_start: 32,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(by_hand, proof);
+    assert!(w.client.verify_transaction(&by_hand).is_ok());
+
+    let other = w.blocks[1].block();
+    assert_ne!(raw.block(&other), honest.block());
+    let lying = TxProof {
+        block: raw.open(&other, &needed),
+        ..by_hand
+    };
+    assert_eq!(
+        w.client.verify_transaction(&lying),
+        Err(Error::BlockIdMismatch)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Ancestry
 // ---------------------------------------------------------------------------

@@ -234,3 +234,22 @@ fn components_may_end_mid_fec_set() {
         Err(Error::TransactionNotFound)
     );
 }
+
+/// A proof may open more of a block than it needs. Whatever the extra shreds
+/// hold, the answer for the same claim is the same: the verifier reads only
+/// what the claim points at, and reads it the same way.
+#[test]
+fn opening_more_of_the_block_changes_nothing() {
+    let w = world();
+    for (i, block) in w.blocks.iter().enumerate() {
+        let all: std::collections::BTreeSet<u32> = (0..block.shred_count()).collect();
+        for signature in block.signatures() {
+            let minimal = w.proof(i, &signature);
+            let verified = w.client.verify_transaction(&minimal).unwrap();
+            let mut full = minimal.clone();
+            full.block = block.open(&all);
+            assert!(full.to_bytes().len() > minimal.to_bytes().len());
+            assert_eq!(w.client.verify_transaction(&full).unwrap(), verified);
+        }
+    }
+}

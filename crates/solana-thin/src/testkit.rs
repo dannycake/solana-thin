@@ -16,6 +16,7 @@ use crate::certificate::{
     encode_bitmap, finalize_payload, notarize_payload, Aggregate, BlockRef, FinalityCert,
 };
 use crate::merkle::{self, Hash, Tree, DATA_SHREDS_PER_FEC_SET};
+pub use crate::prover::RawBlock;
 use crate::prover::{self, BlockData};
 use crate::shred::{
     body_capacity, DataShred, DATA_HEADERS_SIZE, FLAG_DATA_COMPLETE, VARIANT_DATA,
@@ -411,6 +412,29 @@ impl BlockBuilder {
         }
         self.shreds.last_mut().unwrap().flags |= FLAG_DATA_COMPLETE;
         self
+    }
+
+    /// Appends shreds exactly as given: no padding to a whole FEC set, no
+    /// flags set. For layouts [`component`](Self::component) cannot make,
+    /// such as a component that ends mid-set. The block must still come to
+    /// a whole number of FEC sets before [`build`](Self::build).
+    pub fn push_shreds(mut self, shreds: impl IntoIterator<Item = DataShred>) -> Self {
+        self.shreds.extend(shreds);
+        self
+    }
+
+    /// A shred holding `data`, with this builder's variant and parent offset
+    /// and no flags. `data` must fit one shred.
+    pub fn shred(&self, data: &[u8]) -> DataShred {
+        assert!(data.len() <= body_capacity(self.variant).unwrap());
+        let trimmed = data.len() - data.iter().rev().take_while(|b| **b == 0).count();
+        DataShred {
+            variant: self.variant,
+            parent_offset: (self.slot - self.parent.slot) as u16,
+            flags: 0,
+            size: (DATA_HEADERS_SIZE + data.len()) as u16,
+            body: data[..trimmed].to_vec(),
+        }
     }
 
     /// Direct access to a shred, for tests that need a malformed block.

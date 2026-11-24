@@ -76,43 +76,7 @@ impl BlockData {
     }
 
     fn index<T: AsRef<[u8]>>(payloads: &[T], final_parent: Option<BlockRef>) -> Result<Self> {
-        let mut shreds = payloads
-            .iter()
-            .map(|p| RawDataShred::parse(p.as_ref()))
-            .collect::<Result<Vec<_>>>()?;
-        shreds.sort_by_key(|s| s.index);
-        let first = shreds.first().ok_or(Error::MissingShred(0))?;
-        let (slot, version) = (first.slot, first.shred_version);
-        if shreds.len() % DATA_SHREDS_PER_FEC_SET != 0 {
-            return Err(Error::MissingShred(shreds.len() as u32));
-        }
-        for (i, shred) in shreds.iter().enumerate() {
-            if shred.index != i as u32 {
-                return Err(Error::MissingShred(i as u32));
-            }
-            if shred.slot != slot || shred.shred_version != version {
-                return Err(Error::InvalidShred(
-                    "slot or version differs within the block",
-                ));
-            }
-            if shred.fec_set_index != (i - i % DATA_SHREDS_PER_FEC_SET) as u32 {
-                return Err(Error::InvalidShred("FEC set index"));
-            }
-        }
-
-        // One root per FEC set; every shred of a set must agree on it.
-        let mut fec_roots = Vec::with_capacity(shreds.len() / DATA_SHREDS_PER_FEC_SET);
-        for set in shreds.chunks(DATA_SHREDS_PER_FEC_SET) {
-            let root = set[0].fec_set_root()?;
-            for shred in set {
-                if shred.fec_set_root()? != root {
-                    return Err(Error::InvalidShred(
-                        "shreds of one FEC set disagree on its root",
-                    ));
-                }
-            }
-            fec_roots.push(root);
-        }
+        let (slot, shreds, fec_roots) = parse_block_shreds(payloads)?;
 
         // Components are the runs between DATA_COMPLETE flags.
         let mut components = Vec::new();
@@ -160,14 +124,7 @@ impl BlockData {
             ))?,
         };
 
-        let fec_set_count = fec_roots.len() as u32;
-        let mut leaves = fec_roots.clone();
-        leaves.push(merkle::sha256(&[
-            &parent.slot.to_le_bytes(),
-            &parent.id,
-            &fec_set_count.to_le_bytes(),
-        ]));
-        let tree = Tree::new(leaves);
+        let tree = block_tree(&fec_roots, &parent);
         Ok(Self {
             block: BlockRef {
                 slot,
@@ -282,59 +239,200 @@ impl BlockData {
     ///
     /// Panics if `needed` is empty or names a shred the block does not have.
     pub fn open(&self, needed: &BTreeSet<u32>) -> BlockProof {
-        assert!(!needed.is_empty(), "nothing to open");
-        let per_set = DATA_SHREDS_PER_FEC_SET as u32;
-        let mut sets = Vec::new();
-        let mut touched: Vec<u32> = needed.iter().map(|i| i / per_set).collect();
-        touched.dedup();
-        for set in touched {
-            let base = set * per_set;
-            let in_set = needed.range(base..base + per_set);
-            let first = *in_set.clone().next().unwrap();
-            let last = *in_set.clone().next_back().unwrap();
-            let all = &self.shreds[base as usize..(base + per_set) as usize];
-            let leaves: Vec<Hash> = all.iter().map(|s| s.leaf_hash().unwrap()).collect();
-            let run = (first - base) as usize..=(last - base) as usize;
-            let coding_root: Node = all[0].proof[5];
-            sets.push(FecSetProof {
-                set,
-                first: (first - base) as u8,
-                shreds: all[run.clone()].iter().map(|s| s.shred.clone()).collect(),
-                chained_root: all[0].chained_root,
-                siblings: merkle::data_range_siblings(
-                    &leaves,
-                    *run.start(),
-                    run.end() - run.start() + 1,
-                ),
-                coding_root,
-                path: self.tree.path(set as usize),
-            });
+        open_shreds(&self.shreds, &self.tree, self.parent_link(), needed)
+    }
+}
+
+/// Parses a block's data shreds and checks only what is needed to hash them
+/// up to a block id: every index present once, whole FEC sets, one slot and
+/// version, and one Merkle root per set. Returns the slot, the shreds in
+/// order, and the FEC set roots.
+fn parse_block_shreds<T: AsRef<[u8]>>(
+    payloads: &[T],
+) -> Result<(u64, Vec<RawDataShred>, Vec<Hash>)> {
+    let mut shreds = payloads
+        .iter()
+        .map(|p| RawDataShred::parse(p.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+    shreds.sort_by_key(|s| s.index);
+    let first = shreds.first().ok_or(Error::MissingShred(0))?;
+    let (slot, version) = (first.slot, first.shred_version);
+    if shreds.len() % DATA_SHREDS_PER_FEC_SET != 0 {
+        return Err(Error::MissingShred(shreds.len() as u32));
+    }
+    for (i, shred) in shreds.iter().enumerate() {
+        if shred.index != i as u32 {
+            return Err(Error::MissingShred(i as u32));
         }
-        BlockProof {
-            parent: self.parent_link(),
-            sets,
+        if shred.slot != slot || shred.shred_version != version {
+            return Err(Error::InvalidShred(
+                "slot or version differs within the block",
+            ));
         }
+        if shred.fec_set_index != (i - i % DATA_SHREDS_PER_FEC_SET) as u32 {
+            return Err(Error::InvalidShred("FEC set index"));
+        }
+    }
+
+    // One root per FEC set; every shred of a set must agree on it.
+    let mut fec_roots = Vec::with_capacity(shreds.len() / DATA_SHREDS_PER_FEC_SET);
+    for set in shreds.chunks(DATA_SHREDS_PER_FEC_SET) {
+        let root = set[0].fec_set_root()?;
+        for shred in set {
+            if shred.fec_set_root()? != root {
+                return Err(Error::InvalidShred(
+                    "shreds of one FEC set disagree on its root",
+                ));
+            }
+        }
+        fec_roots.push(root);
+    }
+    Ok((slot, shreds, fec_roots))
+}
+
+/// The block's tree: the FEC set roots, then the parent leaf.
+fn block_tree(fec_roots: &[Hash], parent: &BlockRef) -> Tree {
+    let fec_set_count = fec_roots.len() as u32;
+    let mut leaves = fec_roots.to_vec();
+    leaves.push(merkle::sha256(&[
+        &parent.slot.to_le_bytes(),
+        &parent.id,
+        &fec_set_count.to_le_bytes(),
+    ]));
+    Tree::new(leaves)
+}
+
+fn open_shreds(
+    shreds: &[RawDataShred],
+    tree: &Tree,
+    parent: ParentLink,
+    needed: &BTreeSet<u32>,
+) -> BlockProof {
+    assert!(!needed.is_empty(), "nothing to open");
+    let per_set = DATA_SHREDS_PER_FEC_SET as u32;
+    let mut sets = Vec::new();
+    let mut touched: Vec<u32> = needed.iter().map(|i| i / per_set).collect();
+    touched.dedup();
+    for set in touched {
+        let base = set * per_set;
+        let in_set = needed.range(base..base + per_set);
+        let first = *in_set.clone().next().unwrap();
+        let last = *in_set.clone().next_back().unwrap();
+        let all = &shreds[base as usize..(base + per_set) as usize];
+        let leaves: Vec<Hash> = all.iter().map(|s| s.leaf_hash().unwrap()).collect();
+        let run = (first - base) as usize..=(last - base) as usize;
+        let coding_root: Node = all[0].proof[5];
+        sets.push(FecSetProof {
+            set,
+            first: (first - base) as u8,
+            shreds: all[run.clone()].iter().map(|s| s.shred.clone()).collect(),
+            chained_root: all[0].chained_root,
+            siblings: merkle::data_range_siblings(
+                &leaves,
+                *run.start(),
+                run.end() - run.start() + 1,
+            ),
+            coding_root,
+            path: tree.path(set as usize),
+        });
+    }
+    BlockProof { parent, sets }
+}
+
+/// A block's shreds with nothing assumed about what is in them.
+///
+/// [`BlockData`] is an honest prover: it refuses blocks it cannot prove
+/// anything about. Tests that play a dishonest one need the opposite, a way
+/// to open any shreds of any block under any claimed parent and let the
+/// verifier decide. This checks only what hashing needs (complete FEC sets,
+/// one root per set) and interprets nothing.
+#[cfg(any(test, feature = "testkit"))]
+#[derive(Debug, Clone)]
+pub struct RawBlock {
+    slot: u64,
+    shreds: Vec<RawDataShred>,
+    fec_roots: Vec<Hash>,
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl RawBlock {
+    /// Takes all of a block's data shreds, in any order.
+    pub fn from_shreds<T: AsRef<[u8]>>(payloads: &[T]) -> Result<Self> {
+        let (slot, shreds, fec_roots) = parse_block_shreds(payloads)?;
+        Ok(Self {
+            slot,
+            shreds,
+            fec_roots,
+        })
+    }
+
+    /// Number of data shreds.
+    pub fn shred_count(&self) -> u32 {
+        self.shreds.len() as u32
+    }
+
+    /// The block this would be if its parent were `parent`: the id commits to
+    /// the parent, so each claimed parent gives a different id.
+    pub fn block(&self, parent: &BlockRef) -> BlockRef {
+        BlockRef {
+            slot: self.slot,
+            id: block_tree(&self.fec_roots, parent).root(),
+        }
+    }
+
+    /// Opens the given shreds under a claimed parent.
+    ///
+    /// Panics if `needed` is empty or names a shred the block does not have.
+    pub fn open(&self, parent: &BlockRef, needed: &BTreeSet<u32>) -> BlockProof {
+        let tree = block_tree(&self.fec_roots, parent);
+        let link = ParentLink {
+            parent: *parent,
+            fec_set_count: self.fec_roots.len() as u32,
+            path: tree.path(self.fec_roots.len()),
+        };
+        open_shreds(&self.shreds, &tree, link, needed)
+    }
+
+    /// Every index a component could start at: zero, and each index that
+    /// follows a shred flagged `DATA_COMPLETE`.
+    pub fn component_starts(&self) -> Vec<u32> {
+        let mut starts = vec![0];
+        for shred in &self.shreds[..self.shreds.len() - 1] {
+            if shred.shred.data_complete() {
+                starts.push(shred.index + 1);
+            }
+        }
+        starts
+    }
+
+    /// The bytes from shred `start` through the next shred flagged
+    /// `DATA_COMPLETE` (or the block's end), and the index of that last
+    /// shred. Shreds with an invalid size contribute nothing.
+    pub fn component(&self, start: u32) -> (Vec<u8>, u32) {
+        let mut data = Vec::new();
+        let mut last = start;
+        for shred in &self.shreds[start as usize..] {
+            let _ = shred.shred.append_data(&mut data);
+            last = shred.index;
+            if shred.shred.data_complete() {
+                break;
+            }
+        }
+        (data, last)
+    }
+
+    /// The meaningful bytes of one shred.
+    pub fn shred_data(&self, index: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        let _ = self.shreds[index as usize].shred.append_data(&mut data);
+        data
     }
 }
 
 /// Offset just past the transaction at `position` in an entry batch, measured
 /// with the same walk the verifier uses.
 fn end_of(data: &[u8], position: TxPosition) -> Result<usize> {
-    let mut r = crate::wire::Reader::new(data);
-    r.u64()?;
-    for entry in 0..=position.entry {
-        r.bytes(40)?;
-        let count = r.u64()?;
-        let stop = if entry == position.entry {
-            u64::from(position.transaction) + 1
-        } else {
-            count
-        };
-        for _ in 0..stop {
-            crate::transaction::Transaction::read(&mut r)?;
-        }
-    }
-    Ok(r.position())
+    block::walk_to(data, position).map(|(_, end)| end)
 }
 
 /// Assembles a [`TxProof`].

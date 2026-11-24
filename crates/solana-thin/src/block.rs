@@ -213,8 +213,64 @@ pub struct TxPosition {
     pub transaction: u32,
 }
 
-/// Walks an entry batch from its first byte and returns the transaction at
-/// `position`.
+/// A cursor over an entry batch.
+///
+/// This is the one place that knows how entries are laid out. The verifier,
+/// the prover and the test tools all walk a batch with it, so that what a
+/// tool enumerates is exactly what the verifier would read.
+pub(crate) struct Batch<'a> {
+    reader: Reader<'a>,
+    entries: u64,
+    next_entry: u64,
+}
+
+impl<'a> Batch<'a> {
+    /// Starts a walk. Fails on a marker, whose entry count is zero.
+    pub(crate) fn new(data: &'a [u8]) -> Result<Self> {
+        let mut reader = Reader::new(data);
+        let entries = reader.u64()?;
+        if entries == 0 {
+            return Err(Error::InvalidComponent("not an entry batch"));
+        }
+        Ok(Self {
+            reader,
+            entries,
+            next_entry: 0,
+        })
+    }
+
+    /// How many entries the batch says it has.
+    pub(crate) fn entries(&self) -> u64 {
+        self.entries
+    }
+
+    /// Reads the next entry's header. Returns the entry's index and how many
+    /// transactions it holds, or `None` after the last entry. The caller must
+    /// read exactly that many transactions before calling again.
+    pub(crate) fn next_entry(&mut self) -> Result<Option<(u64, u64)>> {
+        if self.next_entry == self.entries {
+            return Ok(None);
+        }
+        self.reader.bytes(8 + 32)?;
+        let count = self.reader.u64()?;
+        let index = self.next_entry;
+        self.next_entry += 1;
+        Ok(Some((index, count)))
+    }
+
+    /// Reads one transaction.
+    pub(crate) fn transaction(&mut self) -> Result<Transaction> {
+        Transaction::read(&mut self.reader)
+    }
+
+    /// Offset of the next unread byte.
+    pub(crate) fn offset(&self) -> usize {
+        self.reader.position()
+    }
+}
+
+/// Walks an entry batch from its first byte to the transaction at `position`,
+/// and returns it with the offset just past its last byte.
 ///
 /// This is the step that makes inclusion mean something. Transactions are not
 /// length-prefixed, so the only honest way to say "these bytes are a
@@ -222,59 +278,80 @@ pub struct TxPosition {
 /// parse everything in front. Bytes that merely *look* like a transaction,
 /// sitting inside another transaction's instruction data, are never reached
 /// as a transaction by this walk.
-pub fn transaction_at(data: &[u8], position: TxPosition) -> Result<Transaction> {
-    let mut r = Reader::new(data);
-    let entries = r.u64()?;
-    if entries == 0 {
-        return Err(Error::InvalidComponent("not an entry batch"));
-    }
-    if u64::from(position.entry) >= entries {
+pub(crate) fn walk_to(data: &[u8], position: TxPosition) -> Result<(Transaction, usize)> {
+    let mut batch = Batch::new(data)?;
+    if u64::from(position.entry) >= batch.entries() {
         return Err(Error::TransactionNotFound);
     }
-    for entry in 0..=position.entry {
-        r.bytes(8 + 32)?;
-        let count = r.u64()?;
-        let wanted = entry == position.entry;
-        if wanted && u64::from(position.transaction) >= count {
+    while let Some((entry, count)) = batch.next_entry()? {
+        if entry < u64::from(position.entry) {
+            for _ in 0..count {
+                batch.transaction()?;
+            }
+            continue;
+        }
+        if u64::from(position.transaction) >= count {
             return Err(Error::TransactionNotFound);
         }
-        let stop = if wanted {
-            u64::from(position.transaction)
-        } else {
-            count
-        };
-        for _ in 0..stop {
-            Transaction::read(&mut r)?;
+        for _ in 0..position.transaction {
+            batch.transaction()?;
         }
-        if wanted {
-            return Transaction::read(&mut r);
-        }
+        let transaction = batch.transaction()?;
+        return Ok((transaction, batch.offset()));
     }
     Err(Error::TransactionNotFound)
 }
 
+/// Walks an entry batch from its first byte and returns the transaction at
+/// `position`. See [`reachable`] for what a walk can reach at all.
+pub fn transaction_at(data: &[u8], position: TxPosition) -> Result<Transaction> {
+    walk_to(data, position).map(|(transaction, _)| transaction)
+}
+
 /// Every transaction of a complete entry batch with its position. Used by the
-/// prover to find a signature.
+/// prover to find a signature. Fails if any part of the batch does not parse.
 pub fn transactions(data: &[u8]) -> Result<Vec<(TxPosition, Transaction)>> {
-    let mut r = Reader::new(data);
-    let entries = r.u64()?;
-    if entries == 0 {
-        return Err(Error::InvalidComponent("not an entry batch"));
-    }
+    let mut batch = Batch::new(data)?;
     let mut out = Vec::new();
-    for entry in 0..entries {
-        r.bytes(8 + 32)?;
-        let count = r.u64()?;
+    while let Some((entry, count)) = batch.next_entry()? {
         for transaction in 0..count {
             let position = TxPosition {
                 entry: u32::try_from(entry).map_err(|_| Error::LimitExceeded("entry count"))?,
                 transaction: u32::try_from(transaction)
                     .map_err(|_| Error::LimitExceeded("transaction count"))?,
             };
-            out.push((position, Transaction::read(&mut r)?));
+            out.push((position, batch.transaction()?));
         }
     }
     Ok(out)
+}
+
+/// Every transaction a walk of `data` reaches, with the offset just past
+/// each, stopping without error at the first thing that does not parse.
+///
+/// Where [`transactions`] answers "what does this whole batch hold",
+/// this answers "what could a verifier be led to read here". It is for tools
+/// that enumerate every claim a proof could make about some bytes: it uses
+/// the same cursor as the verifier, so it reaches a position exactly when
+/// [`transaction_at`] does.
+pub fn reachable(data: &[u8]) -> Vec<(TxPosition, Transaction, usize)> {
+    let mut out = Vec::new();
+    let Ok(mut batch) = Batch::new(data) else {
+        return out;
+    };
+    while let Ok(Some((entry, count))) = batch.next_entry() {
+        for transaction in 0..count {
+            let (Ok(entry), Ok(transaction)) = (u32::try_from(entry), u32::try_from(transaction))
+            else {
+                return out;
+            };
+            let Ok(parsed) = batch.transaction() else {
+                return out;
+            };
+            out.push((TxPosition { entry, transaction }, parsed, batch.offset()));
+        }
+    }
+    out
 }
 
 /// Whether component bytes start an entry batch rather than a marker.
@@ -327,6 +404,36 @@ mod tests {
             transaction: 0,
         };
         assert!(transaction_at(&header, pos).is_err());
+    }
+
+    #[test]
+    fn reachable_reaches_exactly_what_transaction_at_does() {
+        let txs: Vec<Vec<u8>> = (0..5).map(|i| legacy_transaction(i, &[b"m"])).collect();
+        let batch = testkit::entry_batch(&[
+            vec![txs[0].clone(), txs[1].clone()],
+            vec![],
+            vec![txs[2].clone(), txs[3].clone(), txs[4].clone()],
+        ]);
+        // Cut the batch at every length: whatever a walk reaches is what
+        // `transaction_at` returns, and nothing past it is returned at all.
+        for len in 0..=batch.len() {
+            let data = &batch[..len];
+            let reached = reachable(data);
+            for (position, tx, end) in &reached {
+                assert_eq!(&transaction_at(data, *position).unwrap(), tx);
+                assert!(*end <= len);
+            }
+            for (position, _) in transactions(&batch).unwrap() {
+                let found = reached.iter().any(|(p, _, _)| *p == position);
+                assert_eq!(transaction_at(data, position).is_ok(), found);
+            }
+        }
+        assert_eq!(reachable(&batch).len(), 5);
+        assert!(reachable(&testkit::header_component(&BlockRef {
+            slot: 1,
+            id: [0; 32]
+        }))
+        .is_empty());
     }
 
     #[test]
