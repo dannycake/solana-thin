@@ -7,19 +7,21 @@ came from, what was tried and dropped, and what to do next.
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test --all-features`: 82 tests pass (36 unit, 22 attacks, 8
-  conformance, 8 end-to-end, 2 mainnet block, 2 mainnet snapshot, 3
-  properties, 1 doctest). Without `unsound-stale-set`, 76: the stale-set
-  tests are not compiled.
-- A hardening plan is in progress. Its check ledger, oracle and fuzzers are
-  described in `docs/CONFORMANCE.md` as they land. The attack suite
-  takes about 25 seconds; the rest is quick.
-- `cargo clippy --workspace --all-targets --features testkit -- -D warnings`
-  is clean. `cargo doc` is clean.
+- `cargo test --all-features`: 91 tests pass. Without `unsound-stale-set`,
+  85: the stale-set tests are not compiled.
+- CI on GitHub runs fmt, clippy, the tests with and without all features, the
+  same on Rust 1.85, docs, the example and `cargo deny` on every push.
+- A hardening plan is in progress: a check ledger (landed, see
+  `docs/CONFORMANCE.md`), a differential oracle that runs Agave's own
+  blockstore and replay, fuzzers, and a tripwire. As of 2026-11-24 the
+  mainnet feature gates `alpenglow_fast_leader_handover`,
+  `relax_fee_payer_constraint` and `enforce_correct_proof_size` have no
+  account, and public RPC runs 4.4.0 (`scripts/tripwire.py`).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` is
+  clean. `cargo doc` is clean.
 - `rust-version` is 1.85, and the tests pass on 1.85.0. It was declared as
   1.75 and never built there: with the committed `Cargo.lock`, `blst` pulls in
   `zeroize_derive` 1.5, which is an edition 2024 crate.
-- There is no CI. Run the three commands above before pushing.
 - Unaudited. One independent read against Agave v4.4.1's source was done on
   2026-11-23 and found a soundness bug; see "Review findings" below. That is
   a reason to expect more, not fewer.
