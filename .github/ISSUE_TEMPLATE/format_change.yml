@@ -1,0 +1,16 @@
+name: Upstream change
+description: A validator release or a mainnet feature changed something the crate depends on.
+labels: [upstream]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What changed
+      description: The release, pull request or feature gate, with a link. Output of `scripts/tripwire.py` if you ran it.
+    validations:
+      required: true
+  - type: textarea
+    id: rows
+    attributes:
+      label: Ledger rows affected
+      description: Row numbers from docs/CONFORMANCE.md, if you know them.

@@ -1,0 +1,35 @@
+name: Bug report
+description: Something the crate or its tools do wrong. Not for soundness or security bugs.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the verifier **accepts something it should not**, or untrusted input makes it panic or hang,
+        please do not file it here. Report it privately: see [SECURITY.md](https://github.com/dannycake/solana-thin/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, what you got. Error text verbatim.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: A failing test is best. Otherwise the proof or shreds in hex, the validator set, the shred version and the slot.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`, and `rustc --version`.
+    validations:
+      required: true
+  - type: input
+    id: cluster
+    attributes:
+      label: Cluster and validator version
+      description: For example mainnet-beta, Agave 4.4.1. Leave empty if not relevant.

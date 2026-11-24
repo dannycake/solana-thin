@@ -1,5 +1,10 @@
 # solana-thin
 
+[![ci](https://github.com/dannycake/solana-thin/actions/workflows/ci.yml/badge.svg)](https://github.com/dannycake/solana-thin/actions/workflows/ci.yml)
+[![license: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange)](Cargo.toml)
+[![status: unaudited](https://img.shields.io/badge/status-v0.1%2C%20unaudited-red)](SECURITY.md)
+
 A thin client for Solana after Alpenglow. Hand it a proof from anyone, a few
 tens of kilobytes, and it tells you whether your transaction is in a block the
 validators finalized. No node, no replay, no trusted server.
@@ -322,11 +327,7 @@ docs/LOCAL-VALIDATOR.md  the test against a running validator
 docs/NOTES.md            working notes: evidence, sources, decisions, next steps
 ```
 
-## License
-
-MIT or Apache-2.0, at your option.
-
-## Next steps
+## Roadmap
 
 Mainnet works: shreds come from any validator over the repair protocol, and
 the certificates and transactions in them verify. What is missing is the
@@ -342,3 +343,16 @@ software around that.
    `tools/fetch_vote_accounts.py` every epoch and keep the output.
 3. **Review by someone who works on a validator**, and the open items in
    [docs/NOTES.md](docs/NOTES.md).
+
+## Contributing and security
+
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and change the
+verifier. If you find an input the verifier accepts and should not, please
+report it privately: [SECURITY.md](SECURITY.md).
+
+## License
+
+MIT or Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT),
+[LICENSE-APACHE](LICENSE-APACHE)). The mainnet test vectors include stake
+figures from Trillium's API under CC BY 4.0; see the header of
+`crates/solana-thin/tests/mainnet_block.rs`.
