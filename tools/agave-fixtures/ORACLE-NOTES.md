@@ -7,9 +7,8 @@ and what they leave open. Written for whoever builds the full oracle next.
 
 ```
 cd tools/agave-fixtures
-CARGO_TARGET_DIR=/mnt/storage/build/solana-thin/fixtures-target \
-    cargo build --release --bin diff-fuzz
-/mnt/storage/build/solana-thin/fixtures-target/release/diff-fuzz --smoke
+cargo build --release --bin diff-fuzz
+target/release/diff-fuzz --smoke
 ```
 
 The run takes about 0.2 s and is deterministic: two runs print the same

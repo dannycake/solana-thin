@@ -10,8 +10,7 @@ Agave's own harness, so this checks the shred parser and the FEC root
 computation against vectors that nobody on this project wrote.
 
 ```
-CARGO_TARGET_DIR=/mnt/storage/build/solana-thin/shred-fixtures-target \
-    cargo run --release -- --tag 54829b38
+cargo run --release -- --tag 54829b38
 ```
 
 Options: `--cache DIR`, `--expected FILE`, `--offline` (never use the network),

@@ -1272,7 +1272,7 @@ fn main() -> ExitCode {
         handover: vec![true, false],
         filter: None,
         verbose: false,
-        dump: PathBuf::from("/mnt/storage/build/solana-thin/logs/diff-fuzz-dumps"),
+        dump: std::env::temp_dir().join("solana-thin-diff-fuzz-dumps"),
     };
     let mut mode: Option<&str> = None;
     let mut positional: Option<String> = None;

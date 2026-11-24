@@ -72,3 +72,15 @@ which Agave accepts or kills depending on which shred arrives first.
 After changing the verifier, rerun `--corpus`, and `--emit` to refresh the
 frozen cases that `cargo test --test oracle_corpus` replays without Agave.
 
+## Code adapted from Agave
+
+This crate links Agave and, in two places, copies a few lines of it that are
+private to `solana-core`: the replay stage's rule for choosing a block's
+parent and where replay starts (`child_bank_replay_start` in
+`core/src/replay_stage/update_parent.rs`), and the duplicate-shred handler
+(`run_check_duplicate` in `core/src/window_service.rs`). The insert pipeline
+follows the shape of Agave's own conformance harness
+(`conformance/src/shred.rs`). Each is marked where it appears in
+`src/oracle.rs`. Agave is copyright its
+contributors and licensed under Apache-2.0, as this repository also is.
+
