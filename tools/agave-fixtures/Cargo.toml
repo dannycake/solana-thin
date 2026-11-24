@@ -24,6 +24,13 @@ solana-entry = { path = "../agave/entry", features = ["agave-unstable-api", "dev
 solana-ledger = { path = "../agave/ledger", features = ["agave-unstable-api", "dev-context-only-utils"] }
 solana-runtime = { path = "../agave/runtime", features = ["agave-unstable-api", "dev-context-only-utils"] }
 solana-vote = { path = "../agave/vote", features = ["agave-unstable-api", "dev-context-only-utils"] }
+# The differential oracle (src/oracle.rs, src/bin/diff-fuzz.rs).
+agave-feature-set = { path = "../agave/feature-set", features = ["agave-unstable-api"] }
+solana-perf = { path = "../agave/perf", features = ["agave-unstable-api"] }
+solana-streamer = { path = "../agave/streamer", features = ["agave-unstable-api"] }
+solana-svm-timings = { path = "../agave/svm-timings", features = ["agave-unstable-api"] }
+solana-unified-scheduler-pool = { path = "../agave/unified-scheduler-pool", features = ["agave-unstable-api", "dev-context-only-utils"] }
+solana-thin = { path = "../../crates/solana-thin", features = ["testkit"] }
 solana-bls-signatures = "*"
 solana-signer-store = "*"
 solana-hash = "*"
@@ -34,6 +41,9 @@ solana-transaction = "*"
 solana-message = "*"
 solana-system-interface = "*"
 solana-sha256-hasher = "*"
+solana-epoch-schedule = "*"
+crossbeam-channel = "*"
+tempfile = "*"
 wincode = "*"
 bitvec = "*"
 hex = "*"

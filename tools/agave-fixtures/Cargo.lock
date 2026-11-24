@@ -134,28 +134,37 @@ name = "agave-fixtures"
 version = "0.0.0"
 dependencies = [
  "agave-bls-cert-verify",
+ "agave-feature-set",
  "agave-votor-messages",
  "bitvec",
+ "crossbeam-channel",
  "hex",
  "serde_json",
  "solana-bls-signatures",
  "solana-core",
  "solana-entry",
+ "solana-epoch-schedule",
  "solana-hash",
  "solana-keypair",
  "solana-ledger",
  "solana-local-cluster",
  "solana-message",
  "solana-net-utils",
+ "solana-perf",
  "solana-pubkey 4.3.0",
  "solana-rpc-client",
  "solana-runtime",
  "solana-sha256-hasher",
  "solana-signer",
  "solana-signer-store",
+ "solana-streamer",
+ "solana-svm-timings",
  "solana-system-interface",
+ "solana-thin",
  "solana-transaction",
+ "solana-unified-scheduler-pool",
  "solana-vote",
+ "tempfile",
  "wincode",
 ]
 
@@ -8665,6 +8674,14 @@ checksum = "17358d1e9a13e5b9c2264d301102126cf11a47fd394cdf3dec174fe7bc96e1de"
 dependencies = [
  "solana-address 2.7.0",
  "solana-sdk-ids",
+]
+
+[[package]]
+name = "solana-thin"
+version = "0.1.0"
+dependencies = [
+ "blst",
+ "sha2 0.10.9",
 ]
 
 [[package]]
