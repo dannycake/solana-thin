@@ -1,0 +1,26 @@
+# cargo deny: fails on a known vulnerability, an unwanted licence, or a crate
+# from anywhere but crates.io. Run by CI and by `cargo deny check` locally.
+# It covers the main workspace. tools/ and fuzz/ are their own workspaces
+# with their own locks and are not shipped.
+
+[advisories]
+version = 2
+ignore = []
+
+[licenses]
+version = 2
+# What the verifier's dependency tree carries today (blst, sha2 and what they
+# pull in). Anything else is a decision, not a default.
+allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The crate depends on itself with the testkit feature for its own tests.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
