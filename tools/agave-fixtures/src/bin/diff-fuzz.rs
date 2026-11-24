@@ -7,16 +7,37 @@
 //!
 //! Exit status is non-zero if any `CHECK` line fails. `ANSWER` lines report
 //! what Agave did and never fail the run.
+//!
+//! The other modes run the full harness (`agave_fixtures::harness`), each in
+//! two worlds, fast leader handover on and off:
+//!
+//! * `--corpus [DUMP_DIR]` runs every named case and prints a table.
+//! * `--random N --seed S` runs N generated cases, cycling through the
+//!   mutator families.
+//! * `--emit DIR` writes the corpus as frozen vectors for the main
+//!   workspace's `tests/oracle_corpus.rs`.
+//!
+//! They exit non-zero on any P0, P1, P2 or premise violation, and when a
+//! mutator family that should be able to get Agave's vote never did.
 
 use {
-    agave_fixtures::oracle::{
-        AbandonedPrefix, FEC_SET, HonestBlock, HonestSpec, JudgeOptions, Oracle, OracleConfig,
-        Replay, Verdict, set_layout, split_first,
+    agave_fixtures::{
+        corpus::{Tally, check_floors, corpus, generate},
+        harness::{Case, Item, Outcome, World, freeze},
+        oracle::{
+            AbandonedPrefix, FEC_SET, HonestBlock, HonestSpec, JudgeOptions, Oracle, OracleConfig,
+            Replay, Verdict, set_layout, split_first,
+        },
     },
     solana_hash::Hash,
     solana_thin::{BlockRef, prover::BlockData},
     solana_transaction::versioned::VersionedTransaction,
-    std::{process::ExitCode, time::Instant},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        path::{Path, PathBuf},
+        process::ExitCode,
+        time::Instant,
+    },
 };
 
 /// First slot of epoch 1 with the default 32-slot epochs: the first slot
@@ -798,12 +819,499 @@ fn smoke() -> ExitCode {
     }
 }
 
-fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
-        Some("--smoke") => smoke(),
-        _ => {
-            eprintln!("usage: diff-fuzz --smoke");
-            ExitCode::from(2)
+/// What the harness modes share.
+struct Options {
+    /// Worlds to run in: fast leader handover on, off, or both.
+    handover: Vec<bool>,
+    /// Only cases whose name contains this.
+    filter: Option<String>,
+    /// Print every case's verdict in full.
+    verbose: bool,
+    /// Where cases with a violation are written.
+    dump: PathBuf,
+}
+
+/// At most this many violating cases are dumped per run.
+const MAX_DUMPS: usize = 30;
+
+fn slug(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+fn agave_summary(outcome: &Outcome) -> String {
+    let verdict = &outcome.verdict;
+    let executed = verdict.executed.as_ref().map(Vec::len).unwrap_or(0);
+    let mut text = match &verdict.replay {
+        Replay::Ok => format!(
+            "ok from shred {}, {executed} executed",
+            verdict.replay_start
+        ),
+        Replay::Deferred(_) => "deferred (parent id)".to_string(),
+        Replay::NotReplayable(reason) => {
+            let dropped = verdict.discarded();
+            match dropped {
+                0 => reason.clone(),
+                _ => format!("{reason}, {dropped} shred(s) discarded"),
+            }
         }
+        Replay::Failed { error, .. } => {
+            let error: String = error.chars().take(60).collect();
+            format!("dead: {error}")
+        }
+        Replay::Skipped => "skipped".to_string(),
+    };
+    if let Some(error) = &verdict.insert_error {
+        let error: String = error.chars().take(50).collect();
+        text = format!("{text}; insert: {error}");
+    }
+    if outcome.meta_moved {
+        text.push_str(" [meta moves with arrival order]");
+    }
+    if let Some(error) = &outcome.raw_error {
+        text = format!("{text} [light client: {error}]");
+    }
+    text
+}
+
+fn violation_summary(outcome: &Outcome) -> String {
+    let mut parts = Vec::new();
+    for property in ["P0", "P1", "P2", "premise", "opening", "oracle"] {
+        match outcome.count(property) {
+            0 => {}
+            n => parts.push(format!("{property}x{n}")),
+        }
+    }
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+/// Writes a violating case where it can be picked up again: the frozen form
+/// plus the full payloads.
+fn dump(outcome: &Outcome, world: &World, dir: &Path) {
+    let mut value = freeze(outcome, world, usize::MAX);
+    value["payloads"] = outcome
+        .realised
+        .payloads
+        .iter()
+        .map(hex::encode)
+        .collect::<Vec<_>>()
+        .into();
+    value["violations"] = outcome
+        .violations
+        .iter()
+        .map(|v| format!("{}: {}", v.property, v.detail))
+        .collect::<Vec<_>>()
+        .into();
+    let path = dir.join(format!(
+        "{}-handover-{}.json",
+        slug(&outcome.case.name),
+        if world.handover { "on" } else { "off" }
+    ));
+    if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, value.to_string()).is_ok() {
+        println!("    dumped to {}", path.display());
+    }
+}
+
+#[derive(Default)]
+struct Totals {
+    cases: usize,
+    violations: usize,
+    floor_failures: usize,
+}
+
+/// Runs `cases` in one world and prints what the brief asks for: a row per
+/// case (if `table`), every violation, the per-family tally, the floors and
+/// the coverage report. Returns the outcomes.
+fn run_cases(
+    world: &World,
+    cases: &[Case],
+    options: &Options,
+    table: bool,
+    totals: &mut Totals,
+) -> Vec<Outcome> {
+    let started = Instant::now();
+    println!(
+        "\n== fast leader handover {}: {} cases ==",
+        if world.handover { "ON" } else { "OFF" },
+        cases.len()
+    );
+    if table {
+        println!(
+            "{:<68} {:>5} {:>6} {:>8} {:<14} agave",
+            "name", "voted", "claims", "accepted", "violations"
+        );
+    }
+    let mut outcomes = Vec::with_capacity(cases.len());
+    let mut tallies: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut coverage: BTreeMap<String, usize> = BTreeMap::new();
+    let mut shown: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
+    let mut dumped = 0;
+    let mut meta_moved = 0;
+    for case in cases {
+        let outcome = world.run(case);
+        let tally = tallies.entry(case.family.to_string()).or_default();
+        tally.cases += 1;
+        tally.voted += usize::from(outcome.voted);
+        tally.claims += outcome.claims.len();
+        tally.accepted += outcome.accepted();
+        tally.violations += outcome.violations.len();
+        meta_moved += usize::from(outcome.meta_moved);
+        for (reason, n) in &outcome.coverage {
+            *coverage.entry(reason.clone()).or_insert(0) += n;
+        }
+        if table {
+            println!(
+                "{:<68} {:>5} {:>6} {:>8} {:<14} {}",
+                case.name,
+                if outcome.voted { "yes" } else { "no" },
+                if outcome.voted {
+                    outcome.claims.len().to_string()
+                } else {
+                    format!("({})", outcome.enumerated)
+                },
+                if outcome.voted {
+                    outcome.accepted().to_string()
+                } else {
+                    "-".to_string()
+                },
+                violation_summary(&outcome),
+                agave_summary(&outcome),
+            );
+        }
+        if options.verbose {
+            println!("  recipe: {:?}", case.recipe);
+            println!("{}", outcome.verdict);
+            for claim in &outcome.claims {
+                let show = |observed: &Result<(), String>| match observed {
+                    Ok(()) => "ACCEPTED".to_string(),
+                    Err(error) => format!("rejected: {error}"),
+                };
+                println!(
+                    "  claim ({}, {}, {}) footer {:?}: fewest shreds {}; every shred {} (executed \
+                     there: {})",
+                    claim.component_start,
+                    claim.entry,
+                    claim.transaction,
+                    claim.footer_start,
+                    show(&claim.observed),
+                    show(&claim.observed_full),
+                    claim.executed,
+                );
+            }
+        }
+        if !outcome.violations.is_empty() {
+            totals.violations += outcome.violations.len();
+            // In a long run, the first few of a kind are shown in full.
+            let mut printed_header = false;
+            for violation in &outcome.violations {
+                let seen = shown
+                    .entry((case.family.to_string(), violation.property))
+                    .or_insert(0);
+                *seen += 1;
+                if !table && *seen > 3 {
+                    continue;
+                }
+                if !printed_header {
+                    println!(
+                        "  VIOLATION in {} (handover {}):",
+                        case.name,
+                        if world.handover { "on" } else { "off" }
+                    );
+                    println!("    recipe: {:?}", case.recipe.items);
+                    if case.recipe.layout != Default::default() {
+                        println!("    layout: {:?}", case.recipe.layout);
+                    }
+                    printed_header = true;
+                }
+                println!("    {}: {}", violation.property, violation.detail);
+            }
+            if printed_header && dumped < MAX_DUMPS {
+                dump(&outcome, world, &options.dump);
+                dumped += 1;
+            }
+        }
+        outcomes.push(outcome);
+    }
+    totals.cases += outcomes.len();
+
+    println!(
+        "\n-- per family, handover {} --",
+        if world.handover { "on" } else { "off" }
+    );
+    println!(
+        "{:<42} {:>6} {:>6} {:>7} {:>9} {:>10}",
+        "family", "cases", "voted", "claims", "accepted", "violations"
+    );
+    for (family, tally) in &tallies {
+        println!(
+            "{:<42} {:>6} {:>6} {:>7} {:>9} {:>10}",
+            family, tally.cases, tally.voted, tally.claims, tally.accepted, tally.violations
+        );
+    }
+    let all = tallies.values().fold(Tally::default(), |mut all, tally| {
+        all.cases += tally.cases;
+        all.voted += tally.voted;
+        all.claims += tally.claims;
+        all.accepted += tally.accepted;
+        all.violations += tally.violations;
+        all
+    });
+    println!(
+        "{:<42} {:>6} {:>6} {:>7} {:>9} {:>10}",
+        "total", all.cases, all.voted, all.claims, all.accepted, all.violations
+    );
+    let by_property =
+        |property: &str| -> usize { outcomes.iter().map(|o| o.count(property)).sum::<usize>() };
+    println!(
+        "violations by property: P0 {} P1 {} P2 {} premise {} opening {} oracle {}; cases whose \
+         SlotMeta moved with arrival order without any order voting: {meta_moved}",
+        by_property("P0"),
+        by_property("P1"),
+        by_property("P2"),
+        by_property("premise"),
+        by_property("opening"),
+        by_property("oracle"),
+    );
+
+    // Which blocks the violations are in: by family, by the parent the
+    // header names and the parents UpdateParent markers name.
+    let mut where_found: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for outcome in outcomes.iter().filter(|o| !o.violations.is_empty()) {
+        let recipe = &outcome.case.recipe;
+        let switches: Vec<String> = recipe
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Switch(parent) => Some(format!("{parent:?}")),
+                _ => None,
+            })
+            .collect();
+        let properties: BTreeSet<&str> = outcome.violations.iter().map(|v| v.property).collect();
+        let key = format!(
+            "{} | header {:?} | UpdateParent to [{}] | {}",
+            outcome.case.family,
+            recipe.header_parent(),
+            switches.join(", "),
+            properties.into_iter().collect::<Vec<_>>().join("+"),
+        );
+        let entry = where_found.entry(key).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += outcome.violations.len();
+    }
+    if !where_found.is_empty() {
+        println!("-- cases with violations: family | header parent | markers | properties --");
+        for (key, (cases, violations)) in &where_found {
+            println!("{cases:>5} cases {violations:>5} violations  {key}");
+        }
+    }
+
+    let floors = check_floors(&tallies, world.handover);
+    for failure in &floors {
+        println!("{failure}");
+    }
+    totals.floor_failures += floors.len();
+    if floors.is_empty() {
+        println!("floors: every family that should vote did, and none that should not did");
+    }
+
+    println!("-- P3 coverage: transactions Agave executed, by what the honest prover did --");
+    for (reason, n) in &coverage {
+        println!("{n:>7}  {reason}");
+    }
+    println!("({:.1} s)", started.elapsed().as_secs_f64());
+    outcomes
+}
+
+fn worlds(options: &Options) -> Vec<World> {
+    options.handover.iter().map(|on| World::new(*on)).collect()
+}
+
+fn finish(totals: &Totals) -> ExitCode {
+    println!(
+        "\n{} case runs, {} violation(s), {} floor failure(s)",
+        totals.cases, totals.violations, totals.floor_failures
+    );
+    if totals.violations == 0 && totals.floor_failures == 0 {
+        println!("RESULT: clean");
+        ExitCode::SUCCESS
+    } else {
+        println!("RESULT: FAILED");
+        ExitCode::FAILURE
+    }
+}
+
+fn corpus_cases(options: &Options) -> Vec<Case> {
+    corpus()
+        .into_iter()
+        .filter(|case| {
+            options
+                .filter
+                .as_ref()
+                .is_none_or(|filter| case.name.contains(filter.as_str()))
+        })
+        .collect()
+}
+
+fn run_corpus(options: &Options) -> ExitCode {
+    let cases = corpus_cases(options);
+    let mut totals = Totals::default();
+    for world in worlds(options) {
+        run_cases(&world, &cases, options, true, &mut totals);
+    }
+    finish(&totals)
+}
+
+fn run_random(options: &Options, count: u64, seed: u64) -> ExitCode {
+    let mut totals = Totals::default();
+    for world in worlds(options) {
+        let cases: Vec<Case> = (0..count)
+            .map(|n| generate(&world, seed, n))
+            .filter(|case| {
+                options
+                    .filter
+                    .as_ref()
+                    .is_none_or(|filter| case.name.contains(filter.as_str()))
+            })
+            .collect();
+        println!("random: {count} cases from seed {seed}");
+        run_cases(&world, &cases, options, false, &mut totals);
+    }
+    finish(&totals)
+}
+
+/// Writes one frozen file per corpus case, from the world with fast leader
+/// handover on, for the main workspace's `tests/oracle_corpus.rs`.
+fn emit(options: &Options, dir: &Path) -> ExitCode {
+    /// Encoded proofs kept per case. The shreds rebuild every claim; the
+    /// proofs pin the wire format and what the verifier did with them.
+    const PROOFS_PER_CASE: usize = 1;
+    /// A case larger than this is not written.
+    const MAX_FILE: usize = 96 * 1024;
+
+    let world = World::new(true);
+    let cases = corpus_cases(options);
+    let mut totals = Totals::default();
+    let outcomes = run_cases(&world, &cases, options, true, &mut totals);
+    std::fs::create_dir_all(dir).expect("output directory");
+    for entry in std::fs::read_dir(dir).expect("output directory lists") {
+        let path = entry.expect("directory entry").path();
+        if path.extension().is_some_and(|e| e == "json") {
+            std::fs::remove_file(&path).expect("stale vector removed");
+        }
+    }
+    let (mut written, mut bytes, mut skipped) = (0, 0, Vec::new());
+    for outcome in outcomes.iter().filter(|o| o.case.freeze) {
+        let value = freeze(outcome, &world, PROOFS_PER_CASE);
+        let mut text = serde_json::to_string(&value).expect("vector serializes");
+        text.push('\n');
+        if text.len() > MAX_FILE {
+            skipped.push(format!("{} ({} bytes)", outcome.case.name, text.len()));
+            continue;
+        }
+        let path = dir.join(format!("{}.json", slug(&outcome.case.name)));
+        std::fs::write(&path, &text).expect("vector written");
+        written += 1;
+        bytes += text.len();
+    }
+    println!(
+        "\nemit: {written} files, {bytes} bytes, into {}; skipped as too large: {skipped:?}",
+        dir.display()
+    );
+    println!(
+        "emit: {} violation(s) and {} floor failure(s) in the emitted run (frozen as observed)",
+        totals.violations, totals.floor_failures
+    );
+    ExitCode::SUCCESS
+}
+
+fn usage() -> ExitCode {
+    eprintln!(
+        "usage: diff-fuzz --smoke\n       diff-fuzz --corpus [DUMP_DIR] [options]\n       \
+         diff-fuzz --random N --seed S [options]\n       diff-fuzz --emit DIR [options]\n\
+         options: --handover on|off|both (default both)   --filter SUBSTRING   --verbose   \
+         --dump DIR"
+    );
+    ExitCode::from(2)
+}
+
+fn main() -> ExitCode {
+    // Agave explains most refusals only in its log.
+    if let Ok(filter) = std::env::var("DIFF_FUZZ_LOG") {
+        agave_logger::setup_with(&filter);
+    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut options = Options {
+        handover: vec![true, false],
+        filter: None,
+        verbose: false,
+        dump: PathBuf::from("/mnt/storage/build/solana-thin/logs/diff-fuzz-dumps"),
+    };
+    let mut mode: Option<&str> = None;
+    let mut positional: Option<String> = None;
+    let mut count = 0u64;
+    let mut seed = 1u64;
+    let mut i = 0;
+    while i < args.len() {
+        let value = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            args.get(*i).cloned()
+        };
+        match args[i].as_str() {
+            "--smoke" => mode = Some("smoke"),
+            "--corpus" => mode = Some("corpus"),
+            "--emit" => mode = Some("emit"),
+            "--random" => {
+                mode = Some("random");
+                let Some(n) = value(&mut i).and_then(|v| v.parse().ok()) else {
+                    return usage();
+                };
+                count = n;
+            }
+            "--seed" => {
+                let Some(s) = value(&mut i).and_then(|v| v.parse().ok()) else {
+                    return usage();
+                };
+                seed = s;
+            }
+            "--handover" => {
+                options.handover = match value(&mut i).as_deref() {
+                    Some("on") => vec![true],
+                    Some("off") => vec![false],
+                    Some("both") => vec![true, false],
+                    _ => return usage(),
+                }
+            }
+            "--filter" => options.filter = value(&mut i),
+            "--dump" => match value(&mut i) {
+                Some(dir) => options.dump = PathBuf::from(dir),
+                None => return usage(),
+            },
+            "--verbose" => options.verbose = true,
+            other if !other.starts_with("--") && positional.is_none() => {
+                positional = Some(other.to_string())
+            }
+            _ => return usage(),
+        }
+        i += 1;
+    }
+    match mode {
+        Some("smoke") => smoke(),
+        Some("corpus") => {
+            if let Some(dir) = positional {
+                options.dump = PathBuf::from(dir);
+            }
+            run_corpus(&options)
+        }
+        Some("random") => run_random(&options, count, seed),
+        Some("emit") => match positional {
+            Some(dir) => emit(&options, Path::new(&dir)),
+            None => usage(),
+        },
+        _ => usage(),
     }
 }

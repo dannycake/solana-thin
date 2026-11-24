@@ -135,6 +135,7 @@ version = "0.0.0"
 dependencies = [
  "agave-bls-cert-verify",
  "agave-feature-set",
+ "agave-logger",
  "agave-votor-messages",
  "bitvec",
  "crossbeam-channel",

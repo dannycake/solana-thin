@@ -222,6 +222,58 @@ Slot cleanup in `reset_slot` follows `purge_unconfirmed_slot`
 - `cargo clippy` was not run on this crate. Only the three new files were
   formatted (`rustfmt --edition 2024`).
 
+## The full harness (after the spike)
+
+`src/harness.rs` holds a case and the properties; `src/corpus.rs` the named
+cases, Agave's own component-sequence table, and the mutator families.
+
+```
+diff-fuzz --corpus [DUMP_DIR]      every named case, both worlds, a table
+diff-fuzz --random N --seed S      N generated cases per world
+diff-fuzz --emit DIR               frozen vectors for tests/oracle_corpus.rs
+options: --handover on|off|both  --filter SUBSTRING  --verbose  --dump DIR
+DIFF_FUZZ_LOG=warn diff-fuzz ...   Agave's own log lines (most refusals are
+                                   only explained there)
+```
+
+A world is one oracle with fast leader handover on or off. A case is a
+`Recipe` (content items plus a shred layout); `World::run` settles its bank
+hash, judges it forward, reversed and shuffled, and then offers the verifier
+every claim that can be built from the shreds the blockstore kept: every shred
+as a component start, every position `block::reachable` finds, each with the
+fewest shreds opened and with every shred opened, plus every footer-shaped
+component as the footer. Certificates are signed only over a block id Agave
+voted for.
+
+Exit status is non-zero on any P0, P1, P2, premise or opening violation, and
+when a family in `corpus::FAMILIES` breaks its floor (should vote and never
+did) or its ceiling (should never vote and did).
+
+Things the harness had to learn about Agave:
+
+- **The blockstore has memory a purge does not clear.**
+  `update_parent_shred_parent_cache` (`ledger/src/blockstore.rs`) maps
+  `(slot, UpdateParent FEC set)` to the marker shred's parent slot and is
+  never invalidated. Judging a second block at the same slot whose shreds
+  point at another parent gets its shreds refused ("parent != expected shred
+  parent after UpdateParent") and the slot marked dead. The harness therefore
+  uses one test slot per shred parent (`harness::window_slot`: 36, 40, 44).
+  A validator that dumps a slot and repairs another version of it has the
+  same stale entry.
+- **Claims must be offered with every shred opened as well.** The verifier
+  reads as much of a component as the proof supplies. The split-header bug
+  needs shred 1 opened. An opening of the fewest shreds showed it for a
+  component starting at shred 32 only because `RawBlock::open` opens one
+  contiguous run per FEC set, and shreds 0 and 31 make that run all of set 0;
+  for a component further on it opened shred 0 alone and the bug was missed.
+- **Check identity over what the blockstore kept**, not over what was sent:
+  with `LAST_IN_SLOT` set early, Agave's block is the shorter one.
+- **Not every refused shred is refused by the filter.** Flags `0x80` without
+  `0x40` pass `should_discard_shred` and fail `Shred::new_from_serialized_shred`.
+- **`SlotMeta` moves with arrival order** for blocks no order votes for
+  (conflicting UpdateParents, early `LAST_IN_SLOT`). That is reported per
+  run and is not counted as P0. P0 is counted when some order votes.
+
 ## Full output of `diff-fuzz --smoke`
 
 ```

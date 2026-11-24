@@ -28,7 +28,7 @@ use {
     solana_entry::{
         block_component::{
             BlockComponent, BlockFooterV1, ParsedBlockComponent, UpdateParentV1,
-            VersionedBlockMarker,
+            VersionedBlockFooter, VersionedBlockMarker,
         },
         entry::{Entry, next_versioned_entry},
     },
@@ -74,8 +74,8 @@ use {
     solana_svm_timings::ExecuteTimings,
     solana_system_interface::instruction as system_instruction,
     solana_thin::{
-        BlockRef,
-        shred::{DATA_HEADERS_SIZE, VARIANT_DATA, body_capacity},
+        BlockRef, merkle,
+        shred::{DATA_HEADERS_SIZE, DATA_SHRED_SIZE, VARIANT_DATA, body_capacity},
         testkit::BlockBuilder,
     },
     solana_transaction::{Transaction, versioned::VersionedTransaction},
@@ -110,6 +110,9 @@ pub struct OracleConfig {
     pub stake_lamports: u64,
     /// Threads for PoH and signature verification during replay.
     pub verification_threads: usize,
+    /// Whether `alpenglow_fast_leader_handover` is active, which is what
+    /// makes UpdateParent markers legal. Every other feature is always on.
+    pub fast_leader_handover: bool,
 }
 
 impl Default for OracleConfig {
@@ -121,6 +124,7 @@ impl Default for OracleConfig {
             mint_lamports: 1_000_000_000_000_000,
             stake_lamports: 100_000_000_000,
             verification_threads: 2,
+            fast_leader_handover: true,
         }
     }
 }
@@ -314,6 +318,19 @@ pub struct ViewTx {
     pub tx: usize,
     /// First signature.
     pub signature: [u8; 64],
+    /// The transaction's bytes, as replay's parser delimited them.
+    pub wire: Vec<u8>,
+}
+
+/// A footer marker replay read from the blockstore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewFooter {
+    /// Index of the first shred of its component.
+    pub component_start: u32,
+    /// The bank hash it states.
+    pub bank_hash: Hash,
+    /// The leader's clock it states.
+    pub producer_time_nanos: u64,
 }
 
 /// A transaction the scheduler reported a status for.
@@ -339,6 +356,8 @@ pub struct ExecutedTx {
     pub tx: usize,
     /// First signature.
     pub signature: [u8; 64],
+    /// The transaction's bytes, as replay's parser delimited them.
+    pub wire: Vec<u8>,
     /// See [`StatusTx::commit`].
     pub commit: Result<Result<(), String>, String>,
 }
@@ -356,6 +375,10 @@ pub struct Verdict {
     pub duplicates: Vec<String>,
     /// `SlotMeta` after insertion; `None` if no shred was stored.
     pub meta: Option<MetaView>,
+    /// The data shreds the blockstore holds for the slot after insertion,
+    /// in index order: what a node could serve, and what its block id is
+    /// computed over. Not every payload given gets here.
+    pub stored: Vec<Vec<u8>>,
     /// Whether the slot was dead after insertion, before replay.
     pub dead_after_insert: bool,
     /// Whether the slot is dead now.
@@ -373,6 +396,8 @@ pub struct Verdict {
     /// Transactions in the components replay loads, in order. Empty unless
     /// replay ran.
     pub view: Vec<ViewTx>,
+    /// Footer markers in the components replay loads, in order.
+    pub footers: Vec<ViewFooter>,
     /// Error from loading those components.
     pub view_error: Option<String>,
     /// Statuses from the scheduler, sorted by index.
@@ -642,6 +667,51 @@ pub fn split_first(bytes: &[u8], first: usize) -> Vec<&[u8]> {
     std::iter::once(head).chain(tail.chunks(capacity)).collect()
 }
 
+/// Recomputes the Merkle proofs of every FEC set after payloads were edited
+/// in place, and re-chains the sets the way the testkit does (each set's
+/// chained root is the root of the set before it; the first set keeps what it
+/// has). Signatures are left stale: call [`Oracle::sign`] afterwards.
+///
+/// This is what lets a case carry header fields `BlockBuilder` refuses to
+/// write, such as a `size` out of bounds. `payloads` must be whole FEC sets
+/// in index order, as `BlockBuilder::build` returns them.
+pub fn reseal(payloads: &mut [Vec<u8>]) {
+    assert!(payloads.len().is_multiple_of(FEC_SET as usize));
+    let mut previous_root: Option<[u8; 32]> = None;
+    for (set, shreds) in payloads.chunks_mut(FEC_SET as usize).enumerate() {
+        let slot = u64::from_le_bytes(shreds[0][65..73].try_into().unwrap());
+        let mut leaves = Vec::with_capacity(2 * FEC_SET as usize);
+        let mut leaf_ends = Vec::with_capacity(FEC_SET as usize);
+        for payload in shreds.iter_mut() {
+            assert_eq!(payload.len(), DATA_SHRED_SIZE);
+            let capacity = body_capacity(payload[64]).expect("a Merkle data shred variant");
+            let body_end = DATA_HEADERS_SIZE + capacity;
+            if let Some(root) = previous_root {
+                payload[body_end..body_end + 32].copy_from_slice(&root);
+            }
+            leaves.push(merkle::shred_leaf(&payload[64..body_end + 32]));
+            leaf_ends.push(body_end + 32);
+        }
+        for i in 0..u64::from(FEC_SET) {
+            leaves.push(merkle::sha256(&[
+                b"testkit-coding",
+                &slot.to_le_bytes(),
+                &(set as u64).to_le_bytes(),
+                &i.to_le_bytes(),
+            ]));
+        }
+        let tree = merkle::Tree::new(leaves);
+        for (i, payload) in shreds.iter_mut().enumerate() {
+            let mut at = leaf_ends[i];
+            for node in tree.path(i) {
+                payload[at..at + node.len()].copy_from_slice(&node);
+                at += node.len();
+            }
+        }
+        previous_root = Some(tree.root());
+    }
+}
+
 impl Oracle {
     /// Builds the chain: genesis with one validator and every feature
     /// active, Alpenglow enabled from slot 0, an empty blockstore.
@@ -658,6 +728,12 @@ impl Oracle {
             vec![config.stake_lamports],
         );
         genesis_config.creation_time = config.creation_time;
+        if !config.fast_leader_handover {
+            genesis_config
+                .accounts
+                .remove(&agave_feature_set::alpenglow_fast_leader_handover::id())
+                .expect("the all-features genesis activates fast leader handover");
+        }
         genesis_config.epoch_schedule =
             EpochSchedule::custom(config.slots_per_epoch, config.slots_per_epoch, false);
 
@@ -834,6 +910,29 @@ impl Oracle {
         let instruction = system_instruction::transfer(&self.mint.pubkey(), &to, lamports);
         let message = Message::new(&[instruction], Some(&self.mint.pubkey()));
         VersionedTransaction::from(Transaction::new(&[&self.mint], message, blockhash))
+    }
+
+    /// Like [`Oracle::transfer`], with `extra` appended to the instruction
+    /// data: bytes a leader can place inside a transaction at will.
+    pub fn transfer_with_data(
+        &self,
+        seed: &[u8],
+        lamports: u64,
+        extra: &[u8],
+        blockhash: Hash,
+    ) -> VersionedTransaction {
+        let to = Self::recipient(seed);
+        let mut instruction = system_instruction::transfer(&self.mint.pubkey(), &to, lamports);
+        instruction.data.extend_from_slice(extra);
+        let message = Message::new(&[instruction], Some(&self.mint.pubkey()));
+        VersionedTransaction::from(Transaction::new(&[&self.mint], message, blockhash))
+    }
+
+    /// One entry on the hash chain in `chain`, one hash after the previous.
+    pub fn entry(chain: &mut Hash, transactions: Vec<VersionedTransaction>) -> Entry {
+        let entry = next_versioned_entry(chain, 1, transactions);
+        *chain = entry.hash;
+        entry
     }
 
     /// The header marker, as bytes.
@@ -1197,6 +1296,11 @@ impl Oracle {
             insert_error,
             duplicates: duplicates.into_inner(),
             meta: slot_meta.as_ref().map(MetaView::new),
+            stored: self
+                .blockstore
+                .get_data_shreds_for_slot(slot, 0)
+                .map(|shreds| shreds.iter().map(|s| s.payload().to_vec()).collect())
+                .unwrap_or_default(),
             dead_after_insert,
             dead: dead_after_insert,
             block_id,
@@ -1205,6 +1309,7 @@ impl Oracle {
             voted: false,
             replay_start: 0,
             view: Vec::new(),
+            footers: Vec::new(),
             view_error: None,
             statuses: Vec::new(),
             executed: None,
@@ -1334,8 +1439,19 @@ impl Oracle {
         {
             Ok((components, ranges, _full)) => {
                 for (range, component) in ranges.iter().zip(components) {
-                    let ParsedBlockComponent::EntryBatch(entries) = component else {
-                        continue;
+                    let entries = match component {
+                        ParsedBlockComponent::EntryBatch(entries) => entries,
+                        ParsedBlockComponent::BlockMarker(VersionedBlockMarker::V1(marker)) => {
+                            if let Some(VersionedBlockFooter::V1(footer)) = marker.as_block_footer()
+                            {
+                                verdict.footers.push(ViewFooter {
+                                    component_start: range.start,
+                                    bank_hash: footer.bank_hash,
+                                    producer_time_nanos: footer.block_producer_time_nanos,
+                                });
+                            }
+                            continue;
+                        }
                     };
                     for (entry_index, entry) in entries.iter().enumerate() {
                         for (tx_index, tx) in entry.transactions.iter().enumerate() {
@@ -1344,6 +1460,7 @@ impl Oracle {
                                 entry: entry_index,
                                 tx: tx_index,
                                 signature: signature_bytes(tx.signatures()[0]),
+                                wire: tx.data().to_vec(),
                             });
                         }
                     }
@@ -1397,6 +1514,7 @@ impl Oracle {
                     entry: view.entry,
                     tx: view.tx,
                     signature: view.signature,
+                    wire: view.wire.clone(),
                     commit: status.commit.clone(),
                 })
                 .collect()

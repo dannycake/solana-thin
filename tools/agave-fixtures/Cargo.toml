@@ -30,6 +30,8 @@ solana-perf = { path = "../agave/perf", features = ["agave-unstable-api"] }
 solana-streamer = { path = "../agave/streamer", features = ["agave-unstable-api"] }
 solana-svm-timings = { path = "../agave/svm-timings", features = ["agave-unstable-api"] }
 solana-unified-scheduler-pool = { path = "../agave/unified-scheduler-pool", features = ["agave-unstable-api", "dev-context-only-utils"] }
+# Agave's own log lines, for `DIFF_FUZZ_LOG=warn diff-fuzz ...`.
+agave-logger = { path = "../agave/logger" }
 solana-thin = { path = "../../crates/solana-thin", features = ["testkit"] }
 solana-bls-signatures = "*"
 solana-signer-store = "*"
