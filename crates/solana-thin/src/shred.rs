@@ -38,6 +38,10 @@ pub const VARIANT_DATA_RESIGNED: u8 = 0xb6;
 
 /// Set on the last shred of a block component.
 pub const FLAG_DATA_COMPLETE: u8 = 0b0100_0000;
+/// Both completion bits. A shred with the top bit set and
+/// [`FLAG_DATA_COMPLETE`] clear is one no validator keeps.
+const FLAG_COMPLETION_BITS: u8 = 0b1100_0000;
+const FLAG_LAST_WITHOUT_COMPLETE: u8 = 0b1000_0000;
 
 /// Body bytes a data shred of this variant can hold, or `None` if the variant
 /// is not a Merkle data shred with the fixed 32+32 erasure layout.
@@ -96,6 +100,39 @@ impl DataShred {
         self.flags & FLAG_DATA_COMPLETE != 0
     }
 
+    /// Refuses a shred that no validator would have let into a block.
+    ///
+    /// A validator drops these on arrival (the fetch filter and `sanitize`
+    /// in Agave's `ledger/src/shred/`), whether they came by turbine, by
+    /// repair or out of erasure recovery. A block that needs one never
+    /// becomes complete, so a finalized block has none, and a proof that
+    /// shows one is not about a finalized block:
+    ///
+    /// * a size outside the body;
+    /// * the "last in slot" bit without the "data complete" bit;
+    /// * "data complete" anywhere but the last data shred of a FEC set
+    ///   (which also puts "last in slot" there);
+    /// * a parent offset of zero outside slot 0, or one that reaches back
+    ///   past slot 0.
+    pub fn sanitize(&self, slot: u64, index: u32) -> Result<()> {
+        self.data_len()?;
+        if self.flags & FLAG_COMPLETION_BITS == FLAG_LAST_WITHOUT_COMPLETE {
+            return Err(Error::InvalidShred("last-in-slot without data-complete"));
+        }
+        let last_of_set = index % crate::merkle::DATA_SHREDS_PER_FEC_SET as u32
+            == crate::merkle::DATA_SHREDS_PER_FEC_SET as u32 - 1;
+        if self.data_complete() && !last_of_set {
+            return Err(Error::InvalidShred(
+                "data-complete off the end of a FEC set",
+            ));
+        }
+        let offset = u64::from(self.parent_offset);
+        if offset > slot || (offset == 0 && slot != 0) {
+            return Err(Error::InvalidShred("parent offset"));
+        }
+        Ok(())
+    }
+
     /// Rebuilds the bytes a validator hashed for this shred: everything from
     /// the variant byte to the end of the chained root.
     ///
@@ -111,8 +148,26 @@ impl DataShred {
         fec_set_index: u32,
         chained_root: &Hash,
     ) -> Result<Vec<u8>> {
+        self.sanitize(slot, index)?;
+        self.leaf_bytes_unchecked(slot, index, shred_version, fec_set_index, chained_root)
+    }
+
+    /// [`leaf_bytes`](Self::leaf_bytes) without [`sanitize`](Self::sanitize):
+    /// the bytes a validator would hash for this shred even if it would then
+    /// throw the shred away. For tools that build or open malformed blocks;
+    /// a verifier never calls this.
+    pub fn leaf_bytes_unchecked(
+        &self,
+        slot: u64,
+        index: u32,
+        shred_version: u16,
+        fec_set_index: u32,
+        chained_root: &Hash,
+    ) -> Result<Vec<u8>> {
         let capacity = body_capacity(self.variant).ok_or(Error::InvalidShred("variant"))?;
-        self.data_len()?;
+        if self.body.len() > capacity {
+            return Err(Error::InvalidShred("body longer than capacity"));
+        }
         let mut leaf = Vec::with_capacity(24 + capacity + CHAINED_ROOT_SIZE);
         leaf.push(self.variant);
         leaf.extend_from_slice(&slot.to_le_bytes());
@@ -169,6 +224,24 @@ pub struct RawDataShred {
 impl RawDataShred {
     /// Parses a full data shred payload.
     pub fn parse(payload: &[u8]) -> Result<Self> {
+        let parsed = Self::parse_layout(payload)?;
+        parsed.shred.sanitize(parsed.slot, parsed.index)?;
+        let per_set = crate::merkle::DATA_SHREDS_PER_FEC_SET as u32;
+        if parsed.fec_set_index % per_set != 0
+            || parsed.index < parsed.fec_set_index
+            || parsed.index - parsed.fec_set_index >= per_set
+            || parsed.index / per_set >= crate::proof::MAX_FEC_SETS_PER_SLOT
+        {
+            return Err(Error::InvalidShred("index"));
+        }
+        Ok(parsed)
+    }
+
+    /// Reads the fields of a data shred and checks nothing about them beyond
+    /// the variant, which decides the layout. [`parse`](Self::parse) is this
+    /// plus every rule a validator applies before keeping a shred. For tools
+    /// that handle blocks a validator would not accept.
+    pub fn parse_layout(payload: &[u8]) -> Result<Self> {
         if payload.len() < DATA_SHRED_SIZE {
             return Err(Error::InvalidShred("payload too short"));
         }
@@ -199,7 +272,6 @@ impl RawDataShred {
             size,
             body: body[..trimmed].to_vec(),
         };
-        shred.data_len()?;
         Ok(Self {
             slot,
             index,
@@ -213,13 +285,13 @@ impl RawDataShred {
 
     /// The leaf hash of this shred at the position its own header states.
     pub fn leaf_hash(&self) -> Result<Hash> {
-        self.shred.leaf_hash(
+        Ok(merkle::shred_leaf(&self.shred.leaf_bytes_unchecked(
             self.slot,
             self.index,
             self.shred_version,
             self.fec_set_index,
             &self.chained_root,
-        )
+        )?))
     }
 
     /// Root of this shred's FEC set, computed from its embedded path.
@@ -287,7 +359,7 @@ mod tests {
         let shred = DataShred {
             variant: VARIANT_DATA,
             parent_offset: 1,
-            flags: FLAG_DATA_COMPLETE,
+            flags: 0b0000_0101,
             size: 88 + 3,
             body: vec![1, 2, 3],
         };
@@ -297,5 +369,57 @@ mod tests {
         assert_ne!(base, shred.leaf_hash(10, 32, 8, 32, &[0; 32]).unwrap());
         assert_ne!(base, shred.leaf_hash(10, 32, 7, 0, &[0; 32]).unwrap());
         assert_ne!(base, shred.leaf_hash(10, 32, 7, 32, &[1; 32]).unwrap());
+        // So are the reference tick bits, which nothing validates.
+        let mut other_tick = shred.clone();
+        other_tick.flags = 0b0000_0110;
+        assert_ne!(base, other_tick.leaf_hash(10, 32, 7, 32, &[0; 32]).unwrap());
+    }
+
+    #[test]
+    fn shreds_a_validator_would_drop_are_refused() {
+        let shred = |flags: u8, parent_offset: u16| DataShred {
+            variant: VARIANT_DATA,
+            parent_offset,
+            flags,
+            size: 88 + 1,
+            body: vec![1],
+        };
+        // Fine: no flags anywhere; data-complete and last-in-slot on the last
+        // data shred of a FEC set.
+        assert!(shred(0, 1).sanitize(10, 5).is_ok());
+        assert!(shred(FLAG_DATA_COMPLETE, 1).sanitize(10, 31).is_ok());
+        assert!(shred(0b1100_0000, 1).sanitize(10, 63).is_ok());
+
+        // "Last in slot" without "data complete".
+        assert_eq!(
+            shred(0b1000_0000, 1).sanitize(10, 31),
+            Err(Error::InvalidShred("last-in-slot without data-complete"))
+        );
+        // Either completion flag anywhere but the end of a FEC set.
+        for index in [0, 1, 30, 32, 62] {
+            for flags in [FLAG_DATA_COMPLETE, 0b1100_0000] {
+                assert_eq!(
+                    shred(flags, 1).sanitize(10, index),
+                    Err(Error::InvalidShred(
+                        "data-complete off the end of a FEC set"
+                    ))
+                );
+            }
+        }
+        // A parent in this slot, or before slot 0.
+        assert_eq!(
+            shred(0, 0).sanitize(10, 5),
+            Err(Error::InvalidShred("parent offset"))
+        );
+        assert_eq!(
+            shred(0, 11).sanitize(10, 5),
+            Err(Error::InvalidShred("parent offset"))
+        );
+        assert!(shred(0, 10).sanitize(10, 5).is_ok());
+        assert!(shred(0, 0).sanitize(0, 5).is_ok());
+        // And the rule reaches the leaf: such a shred hashes to nothing.
+        assert!(shred(FLAG_DATA_COMPLETE, 1)
+            .leaf_hash(10, 5, 7, 0, &[0; 32])
+            .is_err());
     }
 }

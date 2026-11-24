@@ -170,11 +170,13 @@ fn boundaries_between_shreds_and_fec_sets() {
     }
 }
 
-/// A leader may flag `DATA_COMPLETE` on any shred, splitting what would have
-/// been one batch into two components. The verifier follows the flags, as the
-/// validator does, rather than assuming components fill whole FEC sets.
+/// A leader can flag `DATA_COMPLETE` on any shred it likes, but a validator
+/// throws away a shred that carries the flag anywhere except the end of a FEC
+/// set, so such a block is never completed, let alone finalized. The
+/// verifier refuses the shred the same way, and the honest prover will not
+/// index the block.
 #[test]
-fn components_may_end_mid_fec_set() {
+fn data_complete_is_only_honoured_at_the_end_of_a_fec_set() {
     let w = world();
     let parent = w.blocks[2].block();
     let first = entry_batch(&[vec![
@@ -183,8 +185,8 @@ fn components_may_end_mid_fec_set() {
     ]]);
     let second = entry_batch(&[vec![legacy_transaction(3, &[b"second component"])]]);
 
-    // Lay the two batches out by hand inside one FEC set: the first takes two
-    // shreds, the second starts at the third.
+    // Two batches inside one FEC set: the first takes two shreds and is
+    // flagged complete there; the second starts at the third.
     let mut builder = BlockBuilder::new(3_000, parent, SHRED_VERSION).header();
     let start = builder.next_index();
     let mut joined = first.clone();
@@ -192,10 +194,8 @@ fn components_may_end_mid_fec_set() {
     joined.extend_from_slice(&second);
     builder = builder.component(&joined);
     {
-        // Shred `start + 1` ends the first component...
         let shred = builder.shred_mut(start + 1);
         shred.flags |= solana_thin::shred::FLAG_DATA_COMPLETE;
-        // ...and holds only the first batch's tail, not the padding added above.
         shred.size = (88 + first.len() - 963) as u16;
         shred.body.truncate(first.len() - 963);
     }
@@ -203,36 +203,33 @@ fn components_may_end_mid_fec_set() {
         .component(&footer_component([0; 32], 9, b"", None))
         .component(&entry_batch(&[vec![]]))
         .build();
-    let block = BlockData::from_shreds(&payloads).unwrap();
-    assert_eq!(
-        block.signatures(),
-        [signature_for(1), signature_for(2), signature_for(3)]
-    );
+    let refused = Error::InvalidShred("data-complete off the end of a FEC set");
+    assert_eq!(BlockData::from_shreds(&payloads).unwrap_err(), refused);
 
+    // A dishonest prover opens it anyway. The second batch really is there,
+    // at a boundary the flag really marks, under a valid certificate.
+    let raw = RawBlock::from_shreds(&payloads).unwrap();
+    assert!(raw.component_starts().contains(&(start + 2)));
     let cert = w.validators.fast_cert(
-        block.block(),
+        raw.block(&parent),
         &w.validators.ranks_reaching(8_000),
         SHRED_VERSION,
     );
-    let proof = prover::prove(cert.clone(), &[&block], &signature_for(3), false).unwrap();
-    assert_eq!(proof.component_start, start + 2);
-    w.client
-        .verify_signature(&proof, &signature_for(3))
-        .unwrap();
-
-    // Claiming the third transaction belongs to the first component fails:
-    // the walk stops at the flagged shred.
-    let mut wrong = proof.clone();
-    wrong.component_start = start;
-    wrong.position = TxPosition {
-        entry: 0,
-        transaction: 2,
-    };
-    wrong.block = block.open(&(0..block.shred_count()).collect());
-    assert_eq!(
-        w.client.verify_transaction(&wrong),
-        Err(Error::TransactionNotFound)
-    );
+    let all: std::collections::BTreeSet<u32> = (0..raw.shred_count()).collect();
+    for (component_start, transaction) in [(start + 2, 0), (start, 0), (start, 1)] {
+        let proof = TxProof {
+            finality: cert.clone(),
+            ancestry: vec![],
+            block: raw.open(&parent, &all),
+            component_start,
+            position: TxPosition {
+                entry: 0,
+                transaction,
+            },
+            footer_start: None,
+        };
+        assert_eq!(w.client.verify_transaction(&proof), Err(refused.clone()));
+    }
 }
 
 /// A proof may open more of a block than it needs. Whatever the extra shreds

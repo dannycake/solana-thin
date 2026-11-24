@@ -7,8 +7,8 @@ arriving and a transaction counting as executed in a finalized block, and
 what the verifier does about each. The verifier does far less work than a
 validator; this is the argument that it does enough.
 
-128 checks: 49 enforced, 59 implied,
-8 documented, 2 planned, 10 not about block content.
+128 checks: 57 enforced, 53 implied,
+8 documented, 0 planned, 10 not about block content.
 
 - **Enforced**: the verifier applies the same rule or a stricter one. The
   named test shows it.
@@ -24,10 +24,10 @@ An implied row is only as good as the premise it cites. Each premise is
 meant to be shown by cases in the differential oracle
 (`tools/agave-fixtures`), which runs Agave's own code.
 
-- **`votes-follow-replay`** (27 rows). Validators vote for a block only after replaying it without error, and at most 20% of stake is Byzantine. So a block that dies in replay, or is never replayed, is never finalized.
+- **`votes-follow-replay`** (26 rows). Validators vote for a block only after replaying it without error, and at most 20% of stake is Byzantine. So a block that dies in replay, or is never replayed, is never finalized.
   This is the trust assumption, not something the oracle can show. The oracle shows the other half: that Agave marks the slot dead.
   Oracle cases: none yet.
-- **`dropped-shreds-never-complete`** (13 rows). A shred that the fetch filter or sanitize drops is never inserted, whether it arrived by turbine, by repair, or out of erasure recovery. A block that needs it never becomes full.
+- **`dropped-shreds-never-complete`** (8 rows). A shred that the fetch filter or sanitize drops is never inserted, whether it arrived by turbine, by repair, or out of erasure recovery. A block that needs it never becomes full.
   Oracle cases: none yet.
 - **`replay-from-zero`** (0 rows). With no UpdateParent, replay reads every shred from index 0.
   Oracle cases: none yet.
@@ -53,13 +53,13 @@ The fetch filter, sanitize, signature check and erasure recovery.
 | 6 | Index and FEC set index readable | ledger/src/shred/filter.rs:305-312 (index_bad_deserialize, fec_set_index_bad_deserialize) | dropped | Enforced: `shreds_only_verify_where_they_really_are`. Both are rebuilt from the position the proof claims. |
 | 7 | Merkle proof size is 6 (SIMD-0317) | ledger/src/shred/filter.rs:313-322, 448-466 (invalid_proof_size) | dropped once enforced | Enforced: `path_len_matches_agave`. Stricter: the layout assumes 32:32 sets. |
 | 8 | Data shred index below the per-slot maximum (32,768) | ledger/src/shred/filter.rs:346-349; ledger/src/shred/shred_data.rs:19-24 (index_out_of_bounds, InvalidShredIndex) | dropped | Enforced: `a_block_cannot_claim_more_fec_sets_than_consensus_allows`. Through the FEC set cap of 1,024. Firedancer applies the slot-time-aware cap (16,384 shreds at 200 ms). |
-| 9 | Parent offset readable; slot minus offset does not underflow | ledger/src/shred/filter.rs:350-357 (bad_parent_offset) | dropped | Implied: `dropped-shreds-never-complete` |
-| 10 | Parent offset 0 is invalid except in slot 0 | ledger/src/shred/traits.rs:41-55 (InvalidParentOffset) | rejected at sanitize | Implied: `dropped-shreds-never-complete` |
+| 9 | Parent offset readable; slot minus offset does not underflow | ledger/src/shred/filter.rs:350-357 (bad_parent_offset) | dropped | Enforced: `shreds_a_validator_would_drop_are_refused`. The offset may not reach back past slot 0. |
+| 10 | Parent offset 0 is invalid except in slot 0 | ledger/src/shred/traits.rs:41-55 (InvalidParentOffset) | rejected at sanitize | Enforced: `shreds_a_validator_would_drop_are_refused` |
 | 11 | root <= shred parent < slot | ledger/src/shred/filter.rs:358-361; ledger/src/blockstore.rs:6725-6732 (slot_out_of_range) | dropped | Implied: `dropped-shreds-never-complete`. The verifier checks only parent slot < child slot, from the tree. |
 | 12 | Flags parse | ledger/src/shred/wire.rs:133-143; ledger/src/shred/filter.rs:363-366 (shred_flags_bad_deserialize) | dropped | Implied: `dropped-shreds-never-complete`. All eight bits are defined. |
-| 13 | DATA_COMPLETE only on the last data shred of a FEC set | ledger/src/shred/filter.rs:368-376 (unexpected_data_complete_shred) | dropped, also after recovery (filter.rs:549-565) | Planned: `data_complete_is_only_honoured_at_the_end_of_a_fec_set`. Today the verifier follows the flag anywhere, a superset. Plan task T5b makes it refuse. |
-| 14 | LAST_IN_SLOT only where (index + 1) % 32 == 0 | ledger/src/shred/filter.rs:378-383, 500-502 (misaligned_last_data_index) | dropped | Implied: `dropped-shreds-never-complete` |
-| 15 | Flag bit 0x80 without 0x40 is invalid | ledger/src/shred/shred_data.rs:25-30 (InvalidShredFlags) | rejected | Implied: `dropped-shreds-never-complete`. The verifier tests bit 0x40, as Agave's `contains` does. |
+| 13 | DATA_COMPLETE only on the last data shred of a FEC set | ledger/src/shred/filter.rs:368-376 (unexpected_data_complete_shred) | dropped, also after recovery (filter.rs:549-565) | Enforced: `data_complete_is_only_honoured_at_the_end_of_a_fec_set`. The verifier refuses such a shred before hashing it, and a component may start only at the first shred of a FEC set. |
+| 14 | LAST_IN_SLOT only where (index + 1) % 32 == 0 | ledger/src/shred/filter.rs:378-383, 500-502 (misaligned_last_data_index) | dropped | Enforced: `shreds_a_validator_would_drop_are_refused`. Last-in-slot includes data-complete, so the rule above covers it. |
+| 15 | Flag bit 0x80 without 0x40 is invalid | ledger/src/shred/shred_data.rs:25-30 (InvalidShredFlags) | rejected | Enforced: `shreds_a_validator_would_drop_are_refused` |
 | 16 | 88 <= size <= 88 + capacity | ledger/src/shred/merkle.rs:74-90; ledger/src/shred/filter.rs:386-391 (InvalidDataSize, invalid_data_size) | dropped | Enforced: `size_bounds_follow_the_validator` |
 | 17 | fec_set_index <= index < fec_set_index + 32, and fec_set_index % 32 == 0 | ledger/src/shred/filter.rs:395-398, 484-492 (misaligned_fec_set) | dropped | Enforced: `shreds_only_verify_where_they_really_are`. Derived from the claimed position. |
 | 18 | Coding shreds: index bound, slot above root, 32:32 erasure config | ledger/src/shred/filter.rs:325-344 (misaligned_erasure_config) | dropped | Implied: `dropped-shreds-never-complete`. The verifier uses only the coding subtree's root. |
@@ -83,7 +83,7 @@ Insert, parent information, fullness and the block id.
 | 29 | Index at or past the last index | ledger/src/blockstore.rs:3413-3460 (LastIndexConflict) | dropped, duplicate proof | Implied: `votes-follow-replay` |
 | 30 | LAST_IN_SLOT below what was already received | ledger/src/blockstore.rs:3463-3509 (LastIndexConflict) | dropped | Implied: `votes-follow-replay` |
 | 31 | parent() ok and root <= parent < slot | ledger/src/blockstore.rs:2982-2984, 3511-3521 (InvalidShred) | dropped | Implied: `dropped-shreds-never-complete` |
-| 32 | Every data shred carries the same shred-header parent | ledger/src/blockstore.rs:3523-3613 | dropped; slot never completes | Implied: `dropped-shreds-never-complete`. The verifier never reads the parent offset. |
+| 32 | Every data shred carries the same shred-header parent | ledger/src/blockstore.rs:3523-3613 | dropped; slot never completes | Enforced: `shreds_must_name_the_parent_the_block_commits_to`. Every opened shred must name the parent slot in the block tree. |
 | 33 | All shreds of a FEC set share one Merkle root | ledger/src/blockstore.rs:3188-3250 (MerkleRootConflict) | dropped, duplicate proof | Enforced: `shreds_of_one_block_do_not_open_another`. Every opened shred must hash to the same block id. |
 | 34 | FEC set k chains to set k-1's root | ledger/src/blockstore.rs:1906-1970, 3264-3390 (FixedFECChainedMerkleRootConflict) | ignored once Alpenglow is active (blockstore.rs:290-295) | Documented. The chained root is leader-chosen bytes, committed by the leaf and checked by nobody. Said so on FecSetProof::chained_root. |
 | 35 | Cross-slot chained block id | ledger/src/blockstore_processor.rs:2316-2356 (ChainedBlockIdFailure) | inactive for double-Merkle slots | n/a |
@@ -91,10 +91,10 @@ Insert, parent information, fullness and the block id.
 | 37 | UpdateParent parsed only from the first shred of a FEC set whose predecessor is DATA_COMPLETE | ledger/src/blockstore.rs:1247-1306 | silently not recognised; replay then hits AbandonedBank | Enforced: `a_transaction_in_an_abandoned_block_prefix_is_not_included`. The verifier refuses whenever header and tree disagree, so it never needs to recognise the marker. |
 | 38 | UpdateParent only in the first slot of a leader window | ledger/src/blockstore.rs:620-626 (UpdateParentNotFirstInLeaderWindow) | slot dead | Implied: `votes-follow-replay` |
 | 39 | root <= marker parent < slot | ledger/src/blockstore.rs:644-651 (InvalidParentInfo) | dead | Implied: `votes-follow-replay` |
-| 40 | Header parent slot equals shred parent slot | ledger/src/blockstore.rs:653-659 (BlockHeaderParentMismatch) | dead | Implied: `votes-follow-replay` |
+| 40 | Header parent slot equals shred parent slot | ledger/src/blockstore.rs:653-659 (BlockHeaderParentMismatch) | dead | Enforced: `shreds_must_name_the_parent_the_block_commits_to` |
 | 41 | UpdateParent slot <= shred parent | ledger/src/blockstore.rs:661-667 (UpdateParentSlotGreaterThanShredParent) | dead | Implied: `votes-follow-replay` |
 | 42 | Two differing headers, or two differing UpdateParents | ledger/src/blockstore.rs:594-598 (BlockComponentMismatch, MultipleUpdateParents) | dead | Implied: `votes-follow-replay` |
-| 43 | UpdateParent must not name the header's own parent | ledger/src/blockstore.rs:601-604 (UpdateParentMatchesBlockHeader) | dead | Planned: `a_zero_parent_id_does_not_hide_an_abandoned_prefix`. The rule the header check stands on. It is skipped when the header's parent id is all zeros (blockstore.rs:542-551), reachable only with parent slot 0. Plan task T5b refuses that header. |
+| 43 | UpdateParent must not name the header's own parent | ledger/src/blockstore.rs:601-604 (UpdateParentMatchesBlockHeader) | dead | Enforced: `a_zero_parent_id_does_not_hide_an_abandoned_prefix`. The rule the header check stands on. Agave skips it when the header parent id is all zeros (blockstore.rs:542-551), reachable only with parent slot 0, so the verifier proves nothing in a block with such a parent. |
 | 44 | UpdateParent slot <= header slot | ledger/src/blockstore.rs:606-610 (UpdateParentSlotGreaterThanBlockHeader) | dead | Implied: `votes-follow-replay` |
 | 45 | A component ends at each shred flagged DATA_COMPLETE or LAST_IN_SLOT | ledger/src/blockstore.rs:6353-6424 |  | Enforced: `the_component_boundary_flag_cannot_be_forged` |
 | 46 | Full when consumed == last_index + 1 | ledger/src/blockstore_meta.rs:587-614 (SlotNotFull) |  | Enforced: `duplicated_last_leaf_is_not_a_second_leaf`. The FEC set count in the parent leaf commits the size. |

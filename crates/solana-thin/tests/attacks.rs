@@ -598,14 +598,15 @@ fn a_transaction_embedded_in_another_transactions_data_is_not_included() {
 fn the_component_boundary_flag_cannot_be_forged() {
     let w = world();
     let data = &w.blocks[1];
-    // Shred 40 is in the middle of the large batch that starts at 32.
-    let needed: BTreeSet<u32> = [0, 39, 40, 41].into();
+    // The large batch starts at shred 32 and runs through two FEC sets, so
+    // shred 63 is the last of a set and still in the middle of the batch.
+    let needed: BTreeSet<u32> = [0, 63, 64, 65].into();
     let mut block = data.open(&needed);
     let proof = |block: BlockProof| TxProof {
         finality: w.fast_cert(1),
         ancestry: vec![],
         block,
-        component_start: 40,
+        component_start: 64,
         position: TxPosition {
             entry: 0,
             transaction: 0,
@@ -617,11 +618,34 @@ fn the_component_boundary_flag_cannot_be_forged() {
         Err(Error::NotComponentStart)
     );
     let run = block.sets.iter_mut().find(|s| s.set == 1).unwrap();
-    let shred_39 = &mut run.shreds[39 - 32 - usize::from(run.first)];
-    shred_39.flags |= FLAG_DATA_COMPLETE;
+    let shred_63 = &mut run.shreds[63 - 32 - usize::from(run.first)];
+    shred_63.flags |= FLAG_DATA_COMPLETE;
     assert_eq!(
         w.client.verify_transaction(&proof(block)),
         Err(Error::BlockIdMismatch)
+    );
+
+    // Anywhere else in a FEC set the flag is not even a candidate: a
+    // validator throws such a shred away, and so does the verifier, before
+    // it hashes anything. Nor can a component start mid-set.
+    let needed: BTreeSet<u32> = [0, 39, 40, 41].into();
+    let mut block = data.open(&needed);
+    let mid = |block: BlockProof| TxProof {
+        component_start: 40,
+        ..proof(block)
+    };
+    assert_eq!(
+        w.client.verify_transaction(&mid(block.clone())),
+        Err(Error::NotComponentStart)
+    );
+    let run = block.sets.iter_mut().find(|s| s.set == 1).unwrap();
+    let shred_39 = &mut run.shreds[39 - 32 - usize::from(run.first)];
+    shred_39.flags |= FLAG_DATA_COMPLETE;
+    assert_eq!(
+        w.client.verify_transaction(&mid(block)),
+        Err(Error::InvalidShred(
+            "data-complete off the end of a FEC set"
+        ))
     );
 }
 
@@ -974,6 +998,123 @@ fn a_raw_opening_is_honest_only_under_the_true_parent() {
     assert_eq!(
         w.client.verify_transaction(&lying),
         Err(Error::BlockIdMismatch)
+    );
+}
+
+/// The abandoned-prefix attack once more, through the one hole in the rule
+/// that stops it.
+///
+/// A validator refuses an UpdateParent naming the header's own parent, but it
+/// treats a header whose parent id is all zeros as no header: it cannot tell
+/// that from an id that was never set. So on a block whose parent is a
+/// cluster's first block, a leader can switch to the same parent, the tree
+/// commits to it, the header agrees, and the prefix is thrown away. The
+/// verifier has no way to see the switch, so it proves nothing in any block
+/// with such a parent.
+#[test]
+fn a_zero_parent_id_does_not_hide_an_abandoned_prefix() {
+    let w = world();
+    let parent = BlockRef {
+        slot: 0,
+        id: [0; 32],
+    };
+    let doomed = legacy_transaction(31337, &[b"never executed"]);
+    let kept = legacy_transaction(31338, &[b"executed"]);
+    let payloads = BlockBuilder::new(4, parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![doomed]]))
+        .component(&update_parent_component(&parent))
+        .component(&entry_batch(&[vec![kept]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]))
+        .build();
+
+    let raw = RawBlock::from_shreds(&payloads).unwrap();
+    let cert = w.validators.fast_cert(
+        raw.block(&parent),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    assert!(w.client.verify_finality(&cert).is_ok());
+    // Header in shred 0, the boundary, and the doomed batch: every path valid,
+    // header and tree in agreement.
+    let needed: BTreeSet<u32> = [0, 31, 32].into_iter().collect();
+    let proof = TxProof {
+        finality: cert.clone(),
+        ancestry: vec![],
+        block: raw.open(&parent, &needed),
+        component_start: 32,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(
+        w.client.verify_transaction(&proof),
+        Err(Error::ZeroParentId)
+    );
+
+    // The price: an honest block on the same parent is refused too, and the
+    // honest prover says so rather than build a proof nobody will accept.
+    let honest = BlockBuilder::new(4, parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![legacy_transaction(5, &[b"fine"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]))
+        .build();
+    let data = BlockData::from_shreds(&honest).unwrap();
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    assert_eq!(
+        prover::prove(cert, &[&data], &signature_for(5), false).unwrap_err(),
+        Error::ZeroParentId
+    );
+}
+
+/// Every data shred says how many slots back its parent is, and a validator
+/// kills a slot whose shreds name a different parent slot than its header.
+/// A block whose shreds disagree with the parent it commits to is therefore
+/// not a finalized block, whatever else is right about the proof.
+#[test]
+fn shreds_must_name_the_parent_the_block_commits_to() {
+    let w = world();
+    let parent = w.blocks[2].block();
+    let mut builder = BlockBuilder::new(1010, parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![legacy_transaction(88, &[b"x"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]));
+    for index in 0..builder.next_index() {
+        builder.shred_mut(index).parent_offset += 1;
+    }
+    let payloads = builder.build();
+    let raw = RawBlock::from_shreds(&payloads).unwrap();
+    let cert = w.validators.fast_cert(
+        raw.block(&parent),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let needed: BTreeSet<u32> = [0, 31, 32].into_iter().collect();
+    let proof = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: raw.open(&parent, &needed),
+        component_start: 32,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(
+        w.client.verify_transaction(&proof),
+        Err(Error::InvalidShred(
+            "parent offset does not name the block's parent"
+        ))
     );
 }
 

@@ -205,6 +205,25 @@ impl<'a> VerifiedShreds<'a> {
         Ok(data)
     }
 
+    /// Checks that every opened shred names the block's parent slot.
+    ///
+    /// Each data shred carries how many slots back its parent is. A
+    /// validator kills a slot whose header names a different parent slot
+    /// than its shreds do, and never completes one whose shreds disagree
+    /// with each other. For a block that did not switch parent, that makes
+    /// every shred's offset the distance to the parent in the block's tree.
+    pub(crate) fn check_parent_offset(&self, slot: u64) -> Result<()> {
+        let expected = slot.checked_sub(self.parent.slot);
+        for shred in self.shreds.values() {
+            if Some(u64::from(shred.parent_offset)) != expected {
+                return Err(Error::InvalidShred(
+                    "parent offset does not name the block's parent",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The bytes of the component that starts at shred `start`, as far as the
     /// proof supplies them.
     ///
@@ -214,6 +233,12 @@ impl<'a> VerifiedShreds<'a> {
     /// parse that begins in the middle of a component reads attacker-chosen
     /// bytes as if they were structure.
     pub(crate) fn component(&self, start: u32) -> Result<Vec<u8>> {
+        // A component ends only on the last data shred of a FEC set, so one
+        // starts only on the first of a set. The flag check below implies
+        // this; saying it outright costs nothing.
+        if start % DATA_SHREDS_PER_FEC_SET as u32 != 0 {
+            return Err(Error::NotComponentStart);
+        }
         if start > 0 && !self.get(start - 1)?.data_complete() {
             return Err(Error::NotComponentStart);
         }

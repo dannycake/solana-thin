@@ -83,6 +83,15 @@ impl Transaction {
         Ok(tx)
     }
 
+    /// Parses one transaction from the front of `bytes` and returns it with
+    /// the number of bytes it occupies. This is how a block is walked:
+    /// transactions carry no length, so each one says where the next begins.
+    pub fn parse_prefix(bytes: &[u8]) -> Result<(Self, usize)> {
+        let mut reader = Reader::new(bytes);
+        let tx = Self::read(&mut reader)?;
+        Ok((tx, reader.position()))
+    }
+
     /// The transaction id: its first signature.
     pub fn signature(&self) -> &[u8; 64] {
         &self.signatures[0]

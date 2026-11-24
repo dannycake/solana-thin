@@ -143,8 +143,9 @@ check = "Parent offset readable; slot minus offset does not underflow"
 agave = "ledger/src/shred/filter.rs:350-357"
 error = "bad_parent_offset"
 consequence = "dropped"
-status = "implied"
-premise = "dropped-shreds-never-complete"
+status = "enforced"
+test = "shreds_a_validator_would_drop_are_refused"
+note = "The offset may not reach back past slot 0."
 
 [[check]]
 id = 10
@@ -153,8 +154,8 @@ check = "Parent offset 0 is invalid except in slot 0"
 agave = "ledger/src/shred/traits.rs:41-55"
 error = "InvalidParentOffset"
 consequence = "rejected at sanitize"
-status = "implied"
-premise = "dropped-shreds-never-complete"
+status = "enforced"
+test = "shreds_a_validator_would_drop_are_refused"
 
 [[check]]
 id = 11
@@ -185,9 +186,9 @@ check = "DATA_COMPLETE only on the last data shred of a FEC set"
 agave = "ledger/src/shred/filter.rs:368-376"
 error = "unexpected_data_complete_shred"
 consequence = "dropped, also after recovery (filter.rs:549-565)"
-status = "planned"
+status = "enforced"
 test = "data_complete_is_only_honoured_at_the_end_of_a_fec_set"
-note = "Today the verifier follows the flag anywhere, a superset. Plan task T5b makes it refuse."
+note = "The verifier refuses such a shred before hashing it, and a component may start only at the first shred of a FEC set."
 
 [[check]]
 id = 14
@@ -196,8 +197,9 @@ check = "LAST_IN_SLOT only where (index + 1) % 32 == 0"
 agave = "ledger/src/shred/filter.rs:378-383, 500-502"
 error = "misaligned_last_data_index"
 consequence = "dropped"
-status = "implied"
-premise = "dropped-shreds-never-complete"
+status = "enforced"
+test = "shreds_a_validator_would_drop_are_refused"
+note = "Last-in-slot includes data-complete, so the rule above covers it."
 
 [[check]]
 id = 15
@@ -206,9 +208,8 @@ check = "Flag bit 0x80 without 0x40 is invalid"
 agave = "ledger/src/shred/shred_data.rs:25-30"
 error = "InvalidShredFlags"
 consequence = "rejected"
-status = "implied"
-premise = "dropped-shreds-never-complete"
-note = "The verifier tests bit 0x40, as Agave's `contains` does."
+status = "enforced"
+test = "shreds_a_validator_would_drop_are_refused"
 
 [[check]]
 id = 16
@@ -383,9 +384,9 @@ check = "Every data shred carries the same shred-header parent"
 agave = "ledger/src/blockstore.rs:3523-3613"
 error = ""
 consequence = "dropped; slot never completes"
-status = "implied"
-premise = "dropped-shreds-never-complete"
-note = "The verifier never reads the parent offset."
+status = "enforced"
+test = "shreds_must_name_the_parent_the_block_commits_to"
+note = "Every opened shred must name the parent slot in the block tree."
 
 [[check]]
 id = 33
@@ -466,8 +467,8 @@ check = "Header parent slot equals shred parent slot"
 agave = "ledger/src/blockstore.rs:653-659"
 error = "BlockHeaderParentMismatch"
 consequence = "dead"
-status = "implied"
-premise = "votes-follow-replay"
+status = "enforced"
+test = "shreds_must_name_the_parent_the_block_commits_to"
 
 [[check]]
 id = 41
@@ -496,9 +497,9 @@ check = "UpdateParent must not name the header's own parent"
 agave = "ledger/src/blockstore.rs:601-604"
 error = "UpdateParentMatchesBlockHeader"
 consequence = "dead"
-status = "planned"
+status = "enforced"
 test = "a_zero_parent_id_does_not_hide_an_abandoned_prefix"
-note = "The rule the header check stands on. It is skipped when the header's parent id is all zeros (blockstore.rs:542-551), reachable only with parent slot 0. Plan task T5b refuses that header."
+note = "The rule the header check stands on. Agave skips it when the header parent id is all zeros (blockstore.rs:542-551), reachable only with parent slot 0, so the verifier proves nothing in a block with such a parent."
 
 [[check]]
 id = 44

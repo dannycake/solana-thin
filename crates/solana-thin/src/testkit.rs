@@ -454,15 +454,16 @@ impl BlockBuilder {
                 .iter()
                 .enumerate()
                 .map(|(i, shred)| {
+                    // Unchecked: tests build shreds no validator would keep.
                     shred
-                        .leaf_bytes(
+                        .leaf_bytes_unchecked(
                             self.slot,
                             fec_set_index + i as u32,
                             self.shred_version,
                             fec_set_index,
                             &chained_root,
                         )
-                        .expect("builder shreds are well formed")
+                        .expect("a known variant and a body that fits")
                 })
                 .collect();
             let mut leaves: Vec<Hash> = leaf_bytes.iter().map(|b| merkle::shred_leaf(b)).collect();

@@ -76,7 +76,7 @@ impl BlockData {
     }
 
     fn index<T: AsRef<[u8]>>(payloads: &[T], final_parent: Option<BlockRef>) -> Result<Self> {
-        let (slot, shreds, fec_roots) = parse_block_shreds(payloads)?;
+        let (slot, shreds, fec_roots) = parse_block_shreds(payloads, true)?;
 
         // Components are the runs between DATA_COMPLETE flags.
         let mut components = Vec::new();
@@ -206,6 +206,10 @@ impl BlockData {
         signature: &[u8; 64],
         with_footer: bool,
     ) -> Result<(BlockProof, u32, TxPosition, Option<u32>)> {
+        // A verifier refuses every claim about such a block.
+        if self.parent.id == [0u8; 32] {
+            return Err(Error::ZeroParentId);
+        }
         let (component, position, end) = self.locate(signature)?;
         let mut needed = BTreeSet::new();
         needed.insert(0u32);
@@ -247,12 +251,22 @@ impl BlockData {
 /// up to a block id: every index present once, whole FEC sets, one slot and
 /// version, and one Merkle root per set. Returns the slot, the shreds in
 /// order, and the FEC set roots.
+///
+/// `strict` also applies every rule a validator has for keeping a shred;
+/// without it, shreds a validator would drop are taken as they are.
 fn parse_block_shreds<T: AsRef<[u8]>>(
     payloads: &[T],
+    strict: bool,
 ) -> Result<(u64, Vec<RawDataShred>, Vec<Hash>)> {
     let mut shreds = payloads
         .iter()
-        .map(|p| RawDataShred::parse(p.as_ref()))
+        .map(|p| {
+            if strict {
+                RawDataShred::parse(p.as_ref())
+            } else {
+                RawDataShred::parse_layout(p.as_ref())
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
     shreds.sort_by_key(|s| s.index);
     let first = shreds.first().ok_or(Error::MissingShred(0))?;
@@ -358,7 +372,7 @@ pub struct RawBlock {
 impl RawBlock {
     /// Takes all of a block's data shreds, in any order.
     pub fn from_shreds<T: AsRef<[u8]>>(payloads: &[T]) -> Result<Self> {
-        let (slot, shreds, fec_roots) = parse_block_shreds(payloads)?;
+        let (slot, shreds, fec_roots) = parse_block_shreds(payloads, false)?;
         Ok(Self {
             slot,
             shreds,

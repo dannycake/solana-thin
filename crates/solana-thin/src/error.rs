@@ -88,6 +88,12 @@ pub enum Error {
     /// The block switched parent part way through, so part of it was never
     /// executed. This version refuses to prove inclusion in such blocks.
     UpdateParentBlock,
+    /// The block's parent id is all zeros. Validators do not record such a
+    /// header as naming a parent, so they would not notice a later switch to
+    /// the same parent, and part of the block may never have been executed.
+    /// Only a block built directly on a cluster's first block looks like
+    /// this; nothing in it can be proven.
+    ZeroParentId,
     /// A transaction in the component uses an encoding this build cannot walk.
     UnsupportedTransaction,
     /// The component has no transaction at the claimed position.
@@ -148,6 +154,10 @@ impl fmt::Display for Error {
             Error::DuplicateShred => write!(f, "shred supplied twice"),
             Error::NotComponentStart => write!(f, "claimed component start is not a boundary"),
             Error::InvalidComponent(what) => write!(f, "invalid block component: {what}"),
+            Error::ZeroParentId => write!(
+                f,
+                "the block's parent id is all zeros; a parent switch cannot be ruled out"
+            ),
             Error::UpdateParentBlock => {
                 write!(
                     f,

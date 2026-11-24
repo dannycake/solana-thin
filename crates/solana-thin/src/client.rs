@@ -345,6 +345,16 @@ impl ThinClient {
             Ok(Marker::Header { .. }) => return Err(Error::UpdateParentBlock),
             _ => return Err(NO_HEADER),
         }
+        //    That rule has one hole. A validator treats a header whose
+        //    parent id is all zeros as no header at all (it cannot tell it
+        //    from an unset one), so again a switch to the same parent would
+        //    go unnoticed. Only a block built directly on a cluster's first
+        //    block has such a parent. Nothing in it can be proven.
+        if shreds.parent.id == [0u8; 32] {
+            return Err(Error::ZeroParentId);
+        }
+        //    And the shreds themselves must agree with that parent.
+        shreds.check_parent_offset(block.slot)?;
 
         // 5. Parse the transaction's component from its true start.
         if proof.component_start == 0 {
