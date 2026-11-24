@@ -1,0 +1,72 @@
+# Fuzz targets (docs: the plan's "Fuzzing without the Agave build"): everything in solana-thin
+# that reads bytes from an untrusted prover, and the two byte formats it must read exactly the
+# way a validator does, checked against the validator's own parsers as published on crates.io.
+# Its own workspace, so the oracles' dependency tree and minimum Rust version stay out of the
+# main one. Built by cargo-fuzz with nightly: `scripts/fuzz.sh`.
+[package]
+name = "solana-thin-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+solana-thin = { path = "../crates/solana-thin", features = ["testkit"] }
+# The oracles, pinned to what Agave 4.4.1 resolves (tools/agave-fixtures/Cargo.lock).
+agave-transaction-view = "=7.0.0"
+solana-signer-store = "=0.1.0"
+solana-transaction = { version = "=5.0.0", features = ["wincode"] }
+wincode = "=0.6.1"
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+# One [[bin]] per fuzz target: `cargo fuzz list` reads these. src/bin/seed_corpus.rs is found by
+# cargo on its own and is deliberately not listed here, so it is never mistaken for a target.
+[[bin]]
+name = "proof_verify"
+path = "fuzz_targets/proof_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_view"
+path = "fuzz_targets/transaction_view.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_wincode"
+path = "fuzz_targets/transaction_wincode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bitmap"
+path = "fuzz_targets/bitmap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "marker"
+path = "fuzz_targets/marker.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validator_set"
+path = "fuzz_targets/validator_set.rs"
+test = false
+doc = false
+bench = false
