@@ -143,7 +143,11 @@ The validators themselves run on the same margin.
 **6. Blocks that switch parent mid-way are refused.** With fast leader
 handover a leader may abandon the first part of its block; that part is in the
 finalized bytes but was never executed. v0.1 detects such blocks and refuses
-to prove anything in them rather than work out which part ran.
+to prove anything in them rather than work out which part ran. The feature is
+not active on mainnet as of November 2026, so today this refuses nothing
+there. For the same reason nothing can be proven in a block whose parent id
+is all zeros, which is only ever a block built directly on a cluster's first
+block.
 
 ## Attacks this is built to refuse
 
@@ -155,6 +159,8 @@ that builds the attack and checks the reason it is rejected.
 | Embedded transaction | Your signed transaction's bytes are placed inside another transaction's data. They are in the block, correctly Merkle-proven, and never ran. | `NotComponentStart` |
 | Abandoned prefix | A transaction sits in the part of a block the leader discarded. | `UpdateParentBlock` |
 | Split header | The leader spreads the block header over two shreds. Validators then see no header, and accept a switch to the *same* parent, so header and block id still agree while a prefix is discarded. | `InvalidComponent` |
+| Zero parent id | The same switch, on a block whose parent id is all zeros, which validators also treat as no header. Only a block built on a cluster's first block has one. | `ZeroParentId` |
+| Shreds no validator keeps | A completion flag in the middle of a FEC set, or a parent offset that disagrees with the block's parent. Validators drop such shreds, so the block they come from was never completed. | `InvalidShred` |
 | Notarization as finality | A fast certificate and a notarization are the same signature; only the stake differs. | `InsufficientStake` |
 | Slot-only finalize vote | Finalize votes name a slot, not a block. Paired with the wrong block they prove nothing. | `SignatureMismatch` / `InsufficientStake` |
 | Rogue key | An unchecked key added to the set can cancel every honest key and sign alone for all of them. | `ValidatorSetHashMismatch` / `MissingProofOfPossession` |
@@ -188,7 +194,7 @@ as side effects of its consensus design. This crate uses them as they are.
 
 ## Tests
 
-`cargo test --all-features` runs 91 tests in about half a minute.
+`cargo test --all-features` runs 94 tests in about half a minute.
 
 - **The check ledger** ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)). The 128
   checks an Agave validator applies between a shred arriving and a
@@ -212,7 +218,7 @@ as side effects of its consensus design. This crate uses them as they are.
   certificates (5 valid, 8 invalid), ranks validators the same way, verifies
   the vote program's proofs of possession, and proves and parses 254
   Agave-written transactions (legacy, v0, v1, multi-signer) identically.
-- **Attacks** (`tests/attacks.rs`), 22 tests, as listed above. One flips every
+- **Attacks** (`tests/attacks.rs`), 25 tests, as listed above. One flips every
   bit of a valid proof in turn and checks that each mutant is either rejected
   or still true.
 - **Live mainnet keys** (`tests/mainnet_snapshot.rs`). The BLS keys of all

@@ -71,6 +71,10 @@ Given a directory, `verify_ledger` pins the set from
 `vote-accounts-epoch-<E>.json` for epoch `E + 1`. `SET_OFFSET=0` or `2` shows
 the other two rows.
 
+A block built directly on the cluster's first block has a parent id of all
+zeros, and nothing in it can be proven (see `docs/DESIGN.md`). On a test
+validator that is the first block or two. Send transactions after that.
+
 ## What neither run shows
 
 - **A leader switching parent** (`UpdateParent`). Fast leader handover was

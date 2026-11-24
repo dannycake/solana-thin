@@ -225,11 +225,36 @@ transaction is to parse from the start of the batch. So the verifier requires:
    prefix was still thrown away. v0.1 first read the header from the whole
    component and accepted a transaction from such a prefix; a review found
    it. The test is `a_header_split_across_shreds_does_not_hide_an_abandoned_prefix`.
+
+   The blockstore has a second way to see no header: a header whose parent
+   id is all zeros reads to it as an unset one (`ParentInfo::from_slot_meta`),
+   so again an `UpdateParent` to the same parent is not compared with it. A
+   block has such a parent only when it is built directly on a cluster's
+   first block. The verifier proves nothing in those (`ZeroParentId`).
+
+   **If parent switches are ever supported**, the rule would be: with `H`
+   the header from shred 0 alone and `P` the tree's parent, accept when
+   `H == P` and `P`'s id is not zero; or when the proof opens shreds `u - 1`
+   and `u = 32k`, shred `u - 1` is flagged `DATA_COMPLETE`, shred `u`'s own
+   data parses as an `UpdateParent` naming `P`, the slot is the first of its
+   leader window, and the claim's component starts at or after `u`. That is
+   how the blockstore recognises the marker (`maybe_parse_update_parent`),
+   and it allows only one. It is not implemented: the feature is inactive on
+   mainnet, and Agave and Firedancer disagree about blocks with no header.
 2. **The shred before the component, flagged `DATA_COMPLETE`.** Without it a
    proof could start parsing in the middle of a batch, inside bytes an
    attacker chose. The flag is inside the hashed leaf.
 3. **Every shred from the component's start to the transaction's last byte.**
    The walk stops at the first `DATA_COMPLETE`, as the validator's does.
+4. **Shreds a validator would have kept.** Before a shred is hashed it must
+   pass what the fetch filter and `sanitize` require of it: a size inside
+   the body, no "last in slot" without "data complete", "data complete"
+   only on the last data shred of a FEC set, and a parent offset that is
+   non-zero and does not reach past slot 0. After the header check, every
+   opened shred must also name the parent slot the tree commits to. A
+   validator drops or dies on each of these, so a block that shows one was
+   never completed. Components therefore start only at the first shred of a
+   FEC set.
 
 Then the batch is walked (`count`, then per entry `num_hashes`, `hash`,
 `tx_count`, transactions) to the claimed position. The transaction parser
@@ -244,8 +269,8 @@ same length. What this parser accepts beyond that can only occur in bytes a
 validator never executed, which is what the two rules above exist to exclude.
 
 Agave discards a data shred flagged `DATA_COMPLETE` unless it is the last of
-its FEC set (`ledger/src/shred/filter.rs`), so in practice components align
-to FEC sets. The verifier does not rely on that; it follows the flags.
+its FEC set (`ledger/src/shred/filter.rs`), before and after erasure
+recovery, so components align to FEC sets. The verifier requires the same.
 
 ## Proof format
 

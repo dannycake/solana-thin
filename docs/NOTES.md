@@ -7,8 +7,8 @@ came from, what was tried and dropped, and what to do next.
 ## State of the repo
 
 - Branch `main`, pushed.
-- `cargo test --all-features`: 91 tests pass. Without `unsound-stale-set`,
-  85: the stale-set tests are not compiled.
+- `cargo test --all-features`: 94 tests pass. Without `unsound-stale-set`,
+  88: the stale-set tests are not compiled.
 - CI on GitHub runs fmt, clippy, the tests with and without all features, the
   same on Rust 1.85, docs, the example and `cargo deny` on every push.
 - A hardening plan is in progress: a check ledger (landed, see
@@ -207,9 +207,8 @@ These are easy to get wrong and are not all spelled out in `DESIGN.md`.
   be followed by empty shreds, and the last shred of the set must carry
   `DATA_COMPLETE`. A full FEC set may continue into the next one.
 - **`DATA_COMPLETE` is only kept on the last data shred of a FEC set.** Agave
-  discards any other shred that carries it (`filter.rs`). The verifier
-  follows the flags wherever they are, which accepts a superset and is
-  harmless. `components_may_end_mid_fec_set` tests a shape validators drop.
+  discards any other shred that carries it (`filter.rs`), and so does the
+  verifier (`DataShred::sanitize`).
 - **Only two shred variants are accepted:** `0x96` (data) and `0xb6` (data with
   a retransmitter signature). Body capacity is 963 and 899 bytes.
 - **The Merkle leaf covers bytes 64 up to the proof**, which includes the
