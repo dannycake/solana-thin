@@ -251,14 +251,6 @@ impl ValidatorSet {
         // Cannot overflow: the ranks are distinct and the whole set fits.
         Ok(ranks.iter().map(|rank| self.validators[*rank].stake).sum())
     }
-
-    #[cfg(feature = "unsound-stale-set")]
-    fn stake_by_key(&self) -> HashMap<[u8; 48], u64> {
-        self.validators
-            .iter()
-            .map(|v| (v.bls_pubkey, v.stake))
-            .collect()
-    }
 }
 
 /// A validator's own evidence that it holds the secret for its BLS key.
@@ -288,119 +280,6 @@ impl ProofOfPossession {
         message.extend_from_slice(&self.vote_pubkey);
         message.extend_from_slice(bls_pubkey);
         signature.verify(false, &message, POP_DST, &[], &key, false) == BLST_ERROR::BLST_SUCCESS
-    }
-}
-
-/// One rank of an unverified validator list for an epoch the client has no
-/// pinned set for.
-#[cfg(feature = "unsound-stale-set")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Candidate {
-    /// The BLS key claimed to hold this rank.
-    pub bls_pubkey: [u8; 48],
-    /// Needed only if the key is not in the client's trusted set.
-    pub proof_of_possession: Option<ProofOfPossession>,
-}
-
-/// An *untrusted* key list for a later epoch, used only to turn bitmap ranks
-/// back into keys. See [`crate::StalePolicy`].
-///
-/// Nothing in it is taken on faith:
-///
-/// * Its order is checked by the signature itself. Put the keys in the wrong
-///   order and the aggregate no longer verifies.
-/// * It carries no stake. Weight comes only from the trusted set.
-/// * A key the trusted set has never seen must prove possession. Without that
-///   an attacker could add a key built to cancel honest keys out of the
-///   aggregate (a rogue-key attack) and forge any certificate.
-/// * No key may appear twice. A doubled key would let one real signature be
-///   counted as two.
-#[cfg(feature = "unsound-stale-set")]
-#[derive(Clone)]
-pub struct CandidateSet {
-    keys: Vec<[u8; 48]>,
-    parsed: Vec<PublicKey>,
-    proven: Vec<bool>,
-}
-
-#[cfg(feature = "unsound-stale-set")]
-impl core::fmt::Debug for CandidateSet {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CandidateSet")
-            .field("keys", &self.keys.len())
-            .finish()
-    }
-}
-
-#[cfg(feature = "unsound-stale-set")]
-impl CandidateSet {
-    /// Checks and stores a candidate list. Proofs of possession are verified
-    /// here, once, so that certificate checks stay cheap.
-    pub fn new(candidates: Vec<Candidate>) -> Result<Self> {
-        if candidates.is_empty() {
-            return Err(Error::EmptyValidatorSet);
-        }
-        if candidates.len() > MAX_VALIDATORS {
-            return Err(Error::LimitExceeded("validator count"));
-        }
-        let mut seen = std::collections::HashSet::with_capacity(candidates.len());
-        let mut keys = Vec::with_capacity(candidates.len());
-        let mut parsed = Vec::with_capacity(candidates.len());
-        let mut proven = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            if !seen.insert(candidate.bls_pubkey) {
-                return Err(Error::DuplicateValidator);
-            }
-            parsed.push(parse_public_key(&candidate.bls_pubkey)?);
-            proven.push(
-                candidate
-                    .proof_of_possession
-                    .is_some_and(|pop| pop.verify(&candidate.bls_pubkey)),
-            );
-            keys.push(candidate.bls_pubkey);
-        }
-        Ok(Self {
-            keys,
-            parsed,
-            proven,
-        })
-    }
-
-    /// Number of ranks.
-    pub fn len(&self) -> usize {
-        self.keys.len()
-    }
-
-    /// Whether the list is empty. Always false for a constructed list.
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-    }
-
-    /// Verifies `aggregate` over `message` using this list for ranks, and
-    /// returns how much stake *of the trusted set* the signers hold.
-    pub(crate) fn signed_trusted_stake(
-        &self,
-        trusted: &ValidatorSet,
-        aggregate: &Aggregate,
-        message: &[u8],
-    ) -> Result<u64> {
-        let ranks = decode_bitmap(&aggregate.bitmap, self.keys.len())?;
-        if ranks.is_empty() {
-            return Err(Error::NoSigners);
-        }
-        let stake_by_key = trusted.stake_by_key();
-        let mut signed: u64 = 0;
-        let mut keys = Vec::with_capacity(ranks.len());
-        for rank in &ranks {
-            match stake_by_key.get(&self.keys[*rank]) {
-                Some(stake) => signed += stake,
-                None if self.proven[*rank] => {}
-                None => return Err(Error::MissingProofOfPossession),
-            }
-            keys.push(&self.parsed[*rank]);
-        }
-        verify_aggregate(&keys, message, &aggregate.signature)?;
-        Ok(signed)
     }
 }
 

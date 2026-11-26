@@ -12,7 +12,7 @@ Rust 1.85 or newer.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace                  # default features
-cargo test --workspace --all-features   # also the unsound-stale-set tests
+cargo test --workspace --all-features   # also the setlog and bindings tests
 cargo deny check                        # if you have cargo-deny
 ```
 

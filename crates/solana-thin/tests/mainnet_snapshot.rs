@@ -304,19 +304,3 @@ fn a_set_fixed_a_day_ahead_verifies_its_epochs_certificates() {
         assert!(stale.verify_finality(cert).is_err());
     }
 }
-
-#[cfg(feature = "unsound-stale-set")]
-#[test]
-fn live_keys_work_as_a_candidate_list() {
-    let (_, accounts) = accounts();
-    let set = ValidatorSet::from_vote_accounts(&accounts).unwrap();
-    let candidates = set
-        .validators()
-        .iter()
-        .map(|v| Candidate {
-            bls_pubkey: v.bls_pubkey,
-            proof_of_possession: None,
-        })
-        .collect();
-    assert_eq!(CandidateSet::new(candidates).unwrap().len(), set.len());
-}

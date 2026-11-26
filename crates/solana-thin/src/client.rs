@@ -9,8 +9,6 @@ use crate::error::{Error, Result};
 use crate::merkle::Hash;
 use crate::proof::{Limits, TxProof};
 use crate::transaction::Transaction;
-#[cfg(feature = "unsound-stale-set")]
-use crate::validator_set::CandidateSet;
 use crate::validator_set::{self, ValidatorSet};
 use std::collections::BTreeMap;
 
@@ -137,51 +135,6 @@ fn warmup_end(slots_per_epoch: u64) -> Option<(u64, u64)> {
     Some((u64::from(epoch), slot))
 }
 
-/// Opt-in rule for checking certificates from an epoch whose validator set has
-/// not been pinned yet, using the newest pinned set from an earlier epoch.
-///
-/// The client counts only signers it already trusts, at the stake it already
-/// knows for them, and demands more of it: each threshold is raised by
-/// `drift_bps_per_epoch` for every epoch between the pinned set and the
-/// certificate. The reasoning: if the true stake distribution has moved by at
-/// most that much (as a share of total stake) since the pinned epoch, then
-/// signers holding `threshold + drift` of the old stake hold at least
-/// `threshold` of the new.
-///
-/// This is an assumption about the world, not a proof, and the protocol does
-/// not enforce it. Solana caps how fast stake can activate and deactivate at
-/// 9% of the total per epoch, which is where 900 comes from. But stake that is
-/// already active can join the ranked set in a single epoch without
-/// activating (its validator registers a BLS key, or tops up its admission
-/// balance), and that is not capped at all. If more than about a tenth of
-/// stake arrives that way, a certificate this accepts as final may be short
-/// of the real threshold. `docs/DESIGN.md` has the arithmetic.
-///
-/// Treat it as a grace window for showing something rather than nothing. Do
-/// not move value on it, keep `max_epochs` at one, and pin a fresh set as
-/// soon as you can get one.
-#[cfg(feature = "unsound-stale-set")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct StalePolicy {
-    /// How many epochs past a pinned set this may be used.
-    pub max_epochs: u64,
-    /// Extra stake demanded per epoch of distance, in basis points.
-    pub drift_bps_per_epoch: u32,
-}
-
-#[cfg(feature = "unsound-stale-set")]
-impl StalePolicy {
-    /// A policy that reaches `max_epochs` past a pinned set and raises each
-    /// threshold by `drift_bps_per_epoch` basis points per epoch of distance.
-    pub const fn new(max_epochs: u64, drift_bps_per_epoch: u32) -> Self {
-        Self {
-            max_epochs,
-            drift_bps_per_epoch,
-        }
-    }
-}
-
 /// A block the client has checked a finality certificate for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -251,10 +204,6 @@ impl VerifiedTransaction {
 pub struct ThinClient {
     params: ClusterParams,
     trusted: BTreeMap<u64, ValidatorSet>,
-    #[cfg(feature = "unsound-stale-set")]
-    candidates: BTreeMap<u64, CandidateSet>,
-    #[cfg(feature = "unsound-stale-set")]
-    stale: Option<StalePolicy>,
     limits: Limits,
 }
 
@@ -264,10 +213,6 @@ impl ThinClient {
         Self {
             params,
             trusted: BTreeMap::new(),
-            #[cfg(feature = "unsound-stale-set")]
-            candidates: BTreeMap::new(),
-            #[cfg(feature = "unsound-stale-set")]
-            stale: None,
             limits: Limits::default(),
         }
     }
@@ -390,24 +335,7 @@ impl ThinClient {
         let kept = self.trusted.split_off(&epoch);
         let dropped = self.trusted.len();
         self.trusted = kept;
-        #[cfg(feature = "unsound-stale-set")]
-        {
-            self.candidates = self.candidates.split_off(&epoch);
-        }
         dropped
-    }
-
-    /// Turns on stale-set verification. Off by default, and unsound.
-    #[cfg(feature = "unsound-stale-set")]
-    pub fn set_stale_policy(&mut self, policy: Option<StalePolicy>) {
-        self.stale = policy;
-    }
-
-    /// Supplies an untrusted key list for `epoch`, used only under a
-    /// [`StalePolicy`].
-    #[cfg(feature = "unsound-stale-set")]
-    pub fn add_candidate_set(&mut self, epoch: u64, candidates: CandidateSet) {
-        self.candidates.insert(epoch, candidates);
     }
 
     /// Checks a finality certificate against the validator set pinned for the
@@ -445,49 +373,7 @@ impl ThinClient {
             return Ok(FinalizedBlock { block, finality });
         }
 
-        #[cfg(not(feature = "unsound-stale-set"))]
-        {
-            let _ = (parts, finality);
-            Err(Error::UnknownEpoch(epoch))
-        }
-        #[cfg(feature = "unsound-stale-set")]
-        self.verify_finality_stale(epoch, block, finality, parts)
-    }
-
-    /// No pinned set for the certificate's epoch: fall back to an older one,
-    /// if the caller opted in.
-    #[cfg(feature = "unsound-stale-set")]
-    fn verify_finality_stale(
-        &self,
-        epoch: u64,
-        block: BlockRef,
-        finality: Finality,
-        parts: Vec<(&crate::certificate::Aggregate, &[u8], u32)>,
-    ) -> Result<FinalizedBlock> {
-        let policy = self.stale.ok_or(Error::UnknownEpoch(epoch))?;
-        let (trusted_epoch, trusted) = self
-            .trusted
-            .range(..epoch)
-            .next_back()
-            .ok_or(Error::UnknownEpoch(epoch))?;
-        let distance = epoch - trusted_epoch;
-        if distance > policy.max_epochs {
-            return Err(Error::TooStale);
-        }
-        let candidates = self
-            .candidates
-            .get(&epoch)
-            .ok_or(Error::UnknownEpoch(epoch))?;
-        let margin = u64::from(policy.drift_bps_per_epoch).saturating_mul(distance);
-        for (aggregate, message, bps) in parts {
-            let required = u64::from(bps).saturating_add(margin);
-            if required > 10_000 {
-                return Err(Error::TooStale);
-            }
-            let signed = candidates.signed_trusted_stake(trusted, aggregate, message)?;
-            check_stake(signed, trusted.total_stake(), required as u32)?;
-        }
-        Ok(FinalizedBlock { block, finality })
+        Err(Error::UnknownEpoch(epoch))
     }
 
     /// Checks a transaction proof from its encoded form.

@@ -72,15 +72,11 @@ mod wire;
 
 pub use block::{Footer, TxPosition};
 pub use certificate::{Aggregate, BlockRef, Finality, FinalityCert};
-#[cfg(feature = "unsound-stale-set")]
-pub use client::StalePolicy;
 pub use client::{ClusterParams, FinalizedBlock, ThinClient, VerifiedTransaction};
 pub use error::{Error, ErrorKind, Result};
 pub use merkle::Hash;
 pub use proof::{BlockProof, FecSetProof, Limits, ParentLink, TxProof, MAX_FEC_SETS_PER_SLOT};
 pub use transaction::Transaction;
-#[cfg(feature = "unsound-stale-set")]
-pub use validator_set::{Candidate, CandidateSet};
 pub use validator_set::{ProofOfPossession, Validator, ValidatorSet, VoteAccount};
 
 /// Types that may gain variants or fields are `#[non_exhaustive]`, so that
@@ -207,15 +203,5 @@ pub use validator_set::{ProofOfPossession, Validator, ValidatorSet, VoteAccount}
 ///     }
 /// }
 /// ```
-#[cfg_attr(
-    feature = "unsound-stale-set",
-    doc = r"
-```compile_fail,E0639
-let policy = solana_thin::StalePolicy {
-    max_epochs: 1,
-    drift_bps_per_epoch: 900,
-};
-```"
-)]
 #[cfg(doctest)]
 struct NonExhaustive;

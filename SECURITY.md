@@ -21,8 +21,8 @@ Anything that breaks the promise is a security bug here, in particular:
 
 Not bugs, because they are documented limits: a proven transaction may have
 failed or done nothing; account state cannot be proven; the validator-set hash
-has to come from somewhere you trust; blocks that switch parent are refused;
-and the `unsound-stale-set` feature is unsound by name.
+has to come from somewhere you trust; and blocks that switch parent are
+refused.
 
 ## Reporting
 

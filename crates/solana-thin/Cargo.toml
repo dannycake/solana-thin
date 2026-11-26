@@ -18,11 +18,6 @@ default = []
 # Deterministic block and validator builders used by the test suite and examples.
 # Never needed by a verifier.
 testkit = []
-# Checks a certificate against an older validator set when the right one has
-# not been pinned. UNSOUND: its safety argument has a counterexample, see
-# docs/DESIGN.md ("Stale-set mode"). Off by default; never enable it where a
-# wrong answer costs anything.
-unsound-stale-set = []
 # Passed through to `blst`. Without `no-threads`, blst checks signatures on a
 # thread pool it starts the first time one is checked; with it, all work stays
 # on the calling thread. A phone or an embedded host usually wants it on.

@@ -272,8 +272,7 @@ These are easy to get wrong and are not all spelled out in `DESIGN.md`.
 - **Dropped: accepting a new validator set if it overlaps the old one enough**
   ("bounded churn"). An attacker who is the client's only source could shift a
   little stake each epoch and compound it, and unknown keys allow a rogue-key
-  forgery. Replaced by stale-set mode, which trusts no new stake values and
-  cannot be chained.
+  forgery.
 - **Dropped: built-in signed attestations of the set hash** (m-of-n Ed25519).
   `trust_validator_set` with a pinned hash covers it without a new dependency;
   how the hash is agreed is left to the application.
@@ -294,9 +293,9 @@ item was then checked against the source or the network before acting.
    now refuses a block whose header is not wholly in shred 0. Fix and test:
    `ThinClient::verify_transaction` step 4,
    `a_header_split_across_shreds_does_not_hide_an_abandoned_prefix`.
-2. **Stale-set mode has a counterexample.** Stake that is active but outside
-   the ranked set can join in one epoch with no activation, so the 9% cap
-   does not bound drift. Documented; the mode is still there, off by default.
+2. **Stale-set mode had a counterexample, removed.** Stake that is active but
+   outside the ranked set can join in one epoch with no activation, so the 9%
+   cap does not bound drift. The mode was removed before the first release.
 3. **Admission was not reproduced, fixed in the tool.** See the mainnet facts
    above. `ValidatorSet::from_vote_accounts` still ranks whatever it is
    given; it is the fetch tool that drops accounts without a `VATDebit`.
@@ -535,17 +534,16 @@ shared ones.
    it mirrors.** The header-in-shred-0 rule was one such place, and it was not
    found by any test written beforehand. Firedancer was read only for the
    header rule, and never run.
-2. **Stale-set mode.** No sound bound is known. It may be better removed.
-3. **What blocks look like once fast leader handover is active.** Its
+2. **What blocks look like once fast leader handover is active.** Its
    feature has no account on mainnet, testnet or devnet, and none of 805
    captured blocks switched parent. The rules for such blocks are tested
    only on hand-built ones.
-4. **Blocks from other clients.** 72 mainnet blocks from Firedancer leaders
+3. **Blocks from other clients.** 72 mainnet blocks from Firedancer leaders
    and 38 testnet blocks from leaders not running Agave verified. Firedancer
    itself was never run as an oracle.
-5. **What vouches for a set hash.** The exact set can be read three ways
+4. **What vouches for a set hash.** The exact set can be read three ways
    that agree, and none is a proof. A certificate does not vouch for stake.
-6. **The 2^80 leader collision attack** is my own analysis of the 20-byte
+5. **The 2^80 leader collision attack** is my own analysis of the 20-byte
    Merkle truncation. Nobody has reviewed it.
 
 ## Prior work, as checked on GitHub

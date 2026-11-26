@@ -124,14 +124,6 @@ handovers; Solana has no such commitment that a small proof can open.
 - *A real certificate does not vouch for a set.* It proves the order of the
   keys and nothing about their stake, so "the candidate verified a
   certificate" is a check against mistakes, not a reason to trust a hash.
-- *Bridge:* `StalePolicy`, compiled only with the Cargo feature
-  `unsound-stale-set`, checks a certificate from a later epoch against an
-  older pinned set. It counts only signers it already trusts,
-  at the stake it already knows, and raises every threshold by a margin per
-  epoch of distance. New keys must prove possession and carry no weight. This
-  rests on an assumption about how fast stake moves that the protocol does
-  not enforce, and there is a known way to break it
-  ([docs/DESIGN.md](docs/DESIGN.md#stale-set-mode)). Do not move value on it.
 - *What would fix it:* one hash of the next epoch's ranked validators in a
   block footer. See [docs/DESIGN.md](docs/DESIGN.md#what-solana-could-add).
 
@@ -385,7 +377,6 @@ Cargo features, all off by default:
 | `no-threads` | `blst` checks signatures on the calling thread. Without it, `blst` starts a thread pool the first time a signature is checked. Turn it on for a phone or an embedded host. Targets without threads, such as `wasm32-unknown-unknown`, get it without asking. |
 | `portable` | `blst` chooses its instructions when it runs, not when it is built. Without it, an x86-64 build uses ADX if the build machine has it and stops with an illegal instruction on a CPU that does not. Turn it on for a binary built on one machine and run on another. |
 | `testkit` | Deterministic block and validator builders for tests and examples. |
-| `unsound-stale-set` | Stale-set mode, which is unsound ([limit 1](#limits-and-how-the-design-works-around-them)). Leave it off. |
 
 From Kotlin, Swift or JavaScript: [docs/BINDINGS.md](docs/BINDINGS.md). A
 `Verifier` object takes a validator set and its pinned hash for an epoch,
@@ -431,7 +422,7 @@ no network, and no dependency of the verifier on it).
 crates/solana-thin/src
   client.rs         ThinClient: what is trusted, and the verification steps
   certificate.rs    vote payloads, signer bitmaps, thresholds
-  validator_set.rs  ranking, set hash, BLS checks, stale-set mode
+  validator_set.rs  ranking, set hash, BLS checks
   merkle.rs         the double-Merkle block id
   shred.rs          data shred layout and compact form
   block.rs          headers, footers, entry batches

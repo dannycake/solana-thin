@@ -207,50 +207,6 @@ by `x` verifies as a certificate from everyone. The test
 `a_rogue_key_forges_everything_if_an_unpinned_set_is_trusted` does exactly
 this.
 
-### Stale-set mode
-
-Not compiled by default: it sits behind the Cargo feature
-`unsound-stale-set`, named for what it is. With a `StalePolicy`, a
-certificate for epoch `E + j` can be checked against the set pinned for epoch
-`E`:
-
-- The caller supplies a `CandidateSet`: the claimed key order for `E + j`. It
-  is untrusted. Its order is checked by the signature itself, since the wrong
-  order yields the wrong aggregate key.
-- A signer counts for its stake *in the pinned set*. A key not in the pinned
-  set must carry a valid proof of possession (a BLS signature over
-  `"ALPENGLOW" ‖ vote_account ‖ key` under the PoP domain, which is public
-  on-chain data) and counts for zero.
-- No key may be listed twice.
-- Each threshold is raised by `drift_bps_per_epoch × j`.
-
-Reasoning: let `d` be the total variation distance between the old and new
-normalized stake vectors, treating validators that left as weight zero. A
-signer set holding `τ + d` of old stake holds at least `τ` of new stake. If
-`d ≤ drift × j`, the certificate meets the real threshold.
-
-The weak point is the "if", and it is weaker than a rate limit suggests.
-Stake activation and deactivation are each capped at 9% of total stake per
-epoch, which motivates 900 basis points. That cap does not bound `d`:
-
-- **Stake can enter the set without activating.** Stake that is already
-  active but outside the ranked set joins at full weight in one epoch when
-  its validator registers a BLS key, tops up its admission balance, or stops
-  sharing a key or node identity with another account. If a share `x` of the
-  new total arrives this way, signers holding 89% of pinned stake hold
-  `0.89 × (1 − x)` of real stake, which is under 80% once `x` exceeds 10.1%.
-  The client would report fast finality for a block that only 72% notarized
-  when `x` is 19%.
-- **The margin has no slack.** 9% deactivating among the signers and 9%
-  activating elsewhere lands exactly on the threshold.
-- Validators can also leave by the same routes.
-
-So stale mode is not a proof under any assumption the protocol enforces. It
-is a grace window for an application that would otherwise have no answer, to
-be used for an epoch at most and never for value. It cannot be chained: a set
-accepted this way never becomes a base for another step, because the client
-never learns the new stakes.
-
 ## Block ids
 
 `ledger/src/blockstore.rs` (`build_double_merkle_tree`),
@@ -441,5 +397,3 @@ markers over RPC; SIMD-0064's receipts are stagnant.
   the rule it mirrors? The header-in-shred-0 rule was one such place. Each
   such difference is a way a careless verifier could accept bytes that were
   never executed.
-- Stale mode has no sound bound today. Is there one worth having, or should
-  it go?
