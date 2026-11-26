@@ -50,4 +50,4 @@ required-features = ["cli"]
 
 [lints.rust]
 unsafe_code = "forbid"
-missing_docs = "warn"
+missing_docs = "deny"
