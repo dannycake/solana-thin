@@ -33,7 +33,7 @@ set_hash       32 bytes
 validators     u32
 prev           32 bytes
 sources        count:u8, then for each, ascending by kind then label:
-    kind       len:u8, bytes                "snapshot", "rank-map"
+    kind       len:u8, bytes                "snapshot", "rank-map", "admission"
     label      len:u8, bytes                printable ASCII, no spaces
     slot       u64
 ```

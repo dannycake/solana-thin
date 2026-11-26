@@ -26,8 +26,14 @@ pub const MAX_SOURCES: usize = 32;
 pub const KIND_SNAPSHOT: &str = "snapshot";
 /// Source kind: an RPC node's answer to `getVatActiveSetRankMap`.
 pub const KIND_RANK_MAP: &str = "rank-map";
+/// Source kind: not a reading of the set but a check of its members against
+/// the vote accounts charged the admission ticket (`VATDebit` rewards) in
+/// the block that admitted them, the first of the epoch before. The slot is
+/// that block's. It never counts toward a quorum.
+pub const KIND_ADMISSION: &str = "admission";
 
-/// Where a set was read: one of the places that agreed on it.
+/// Where a set was read, one of the places that agreed on it, or how its
+/// members were checked ([`KIND_ADMISSION`]).
 ///
 /// A description for people, not evidence. Nothing in a source can be
 /// checked later; it records what the signers say they looked at.
@@ -177,7 +183,8 @@ impl Record {
         self.validators
     }
 
-    /// The places that gave this set, sorted.
+    /// The places that gave this set, and the admission check if one was
+    /// made, sorted.
     pub fn sources(&self) -> &[Source] {
         &self.sources
     }

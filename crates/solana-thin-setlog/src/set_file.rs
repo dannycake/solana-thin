@@ -6,7 +6,7 @@
 //! were read from.
 
 use crate::error::{Error, Result};
-use crate::record::{canonical_sources, Record, Source, WireSource};
+use crate::record::{canonical_sources, Record, Source, WireSource, KIND_ADMISSION};
 use crate::Hash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -195,7 +195,9 @@ struct WireSetFile {
 /// same set under the same shred version: one that differs is
 /// [`Error::SourcesDisagree`], however many agree, because sources that are
 /// each exact cannot differ. The places they name, counted once each, must
-/// number at least `quorum`.
+/// number at least `quorum`. An admission check
+/// ([`KIND_ADMISSION`](crate::KIND_ADMISSION)) is carried along and not
+/// counted: it did not read the set.
 ///
 /// Returns the set with every source that gave it. What that is worth
 /// depends on the sources being independent, which nothing here can check.
@@ -223,9 +225,13 @@ pub fn agree(inputs: &[SetFile], quorum: usize) -> Result<SetFile> {
             }
         }
     }
-    if sources.len() < quorum {
+    let readings = sources
+        .iter()
+        .filter(|s| s.kind() != KIND_ADMISSION)
+        .count();
+    if readings < quorum {
         return Err(Error::BelowQuorum {
-            have: sources.len(),
+            have: readings,
             need: quorum,
         });
     }

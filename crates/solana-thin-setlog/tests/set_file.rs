@@ -206,6 +206,31 @@ fn one_place_read_twice_counts_once() {
     assert!(agree(&both, 2).is_ok());
 }
 
+/// The admission check is recorded beside the sources, and is not one: it
+/// looked at who paid to be in the set, not at the set.
+#[test]
+fn an_admission_check_does_not_count_toward_the_quorum() {
+    let set = validators(1);
+    let checked = Source::new(KIND_ADMISSION, "vat-debits", 900).unwrap();
+    let inputs = [
+        file(&set, vec![snapshot(1), checked.clone()]),
+        file(&set, vec![snapshot(2), checked.clone()]),
+    ];
+    assert_eq!(
+        agree(&inputs, 3),
+        Err(Error::BelowQuorum { have: 2, need: 3 })
+    );
+    let agreed = agree(&inputs, 2).unwrap();
+    assert_eq!(
+        agreed.sources(),
+        [checked.clone(), snapshot(1), snapshot(2)]
+    );
+    assert_eq!(
+        agree(&[file(&set, vec![checked])], 1),
+        Err(Error::BelowQuorum { have: 0, need: 1 })
+    );
+}
+
 /// Exact sources cannot differ, so one that does is not outvoted.
 #[test]
 fn one_source_that_differs_refuses_the_lot() {

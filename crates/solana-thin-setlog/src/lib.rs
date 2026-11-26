@@ -72,8 +72,8 @@ pub use error::{Error, Result};
 pub use keys::{signer_key_from_hex, SignerKey, SigningKey};
 pub use log::{check_links, parse, to_text, verify, Pin, VerifiedLog};
 pub use record::{
-    Record, RecordSignature, SignedRecord, Source, KIND_RANK_MAP, KIND_SNAPSHOT, MAX_LABEL_LEN,
-    MAX_NAME_LEN, MAX_SOURCES, RECORD_DOMAIN,
+    Record, RecordSignature, SignedRecord, Source, KIND_ADMISSION, KIND_RANK_MAP, KIND_SNAPSHOT,
+    MAX_LABEL_LEN, MAX_NAME_LEN, MAX_SOURCES, RECORD_DOMAIN,
 };
 pub use set_file::{agree, SetFile, SET_FILE_FORMAT};
 
