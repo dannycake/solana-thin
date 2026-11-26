@@ -9,10 +9,35 @@ use serde_json::{json, Value};
 use solana_thin::{Validator, ValidatorSet, VoteAccount};
 use solana_thin_setlog::rpc::{host_label, Rpc};
 use solana_thin_setlog::{SetFile, Source, KIND_RANK_MAP, KIND_SNAPSHOT, SET_FILE_FORMAT};
+use std::collections::BTreeSet;
 
 /// The `format` field of a snapshot extract: the epoch-stakes maps of one
 /// bank snapshot, as `snapshot-stakes` in `tools/agave-fixtures` writes them.
 pub const EXTRACT_FORMAT: &str = "solana-thin/snapshot-extract/v1";
+
+/// A vote account's address.
+pub type Pubkey = [u8; 32];
+
+/// One input of `setlog agree`, and the vote accounts it says are members.
+pub struct Input {
+    pub file: SetFile,
+    /// Every vote account in an extract's epoch-stakes map. `None` for a set
+    /// file, which holds keys and stakes and names no account.
+    pub members: Option<BTreeSet<Pubkey>>,
+}
+
+/// One rank in a rank map, with the accounts the node says it stands for.
+pub struct Ranked {
+    pub vote_pubkey: Pubkey,
+    pub node_pubkey: Pubkey,
+    pub bls_pubkey: [u8; 48],
+}
+
+/// A node's rank map as a set file, and the ranks it gave.
+pub struct RankMapReading {
+    pub file: SetFile,
+    pub ranked: Vec<Ranked>,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,7 +77,7 @@ fn unhex<const N: usize>(text: &str, what: &str) -> Result<[u8; N], String> {
 
 /// Reads one input of `setlog agree`: a set file, or a snapshot extract
 /// from which the set for `epoch` is built.
-pub fn set_file_from_input(text: &str, epoch: u64) -> Result<SetFile, String> {
+pub fn set_file_from_input(text: &str, epoch: u64) -> Result<Input, String> {
     let format = serde_json::from_str::<Value>(text)
         .ok()
         .and_then(|value| Some(value.get("format")?.as_str()?.to_string()))
@@ -63,14 +88,17 @@ pub fn set_file_from_input(text: &str, epoch: u64) -> Result<SetFile, String> {
             if file.epoch() != epoch {
                 return Err(format!("is the set for epoch {}", file.epoch()));
             }
-            Ok(file)
+            Ok(Input {
+                file,
+                members: None,
+            })
         }
         EXTRACT_FORMAT => set_file_from_extract(text, epoch),
         other => Err(format!("unknown format {other:?}")),
     }
 }
 
-fn set_file_from_extract(text: &str, epoch: u64) -> Result<SetFile, String> {
+fn set_file_from_extract(text: &str, epoch: u64) -> Result<Input, String> {
     let extract: Extract = serde_json::from_str(text).map_err(|e| e.to_string())?;
     if extract.format != EXTRACT_FORMAT {
         return Err(format!("unknown format {:?}", extract.format));
@@ -104,22 +132,51 @@ fn set_file_from_extract(text: &str, epoch: u64) -> Result<SetFile, String> {
         .map_err(|e| format!("epoch {epoch} does not rank into a set: {e}"))?;
     let source =
         Source::new(KIND_SNAPSHOT, &extract.node, extract.slot).map_err(|e| e.to_string())?;
-    SetFile::new(
+    let file = SetFile::new(
         &extract.cluster,
         extract.shred_version,
         epoch,
         set.to_bytes(),
         vec![source],
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    let members: BTreeSet<Pubkey> = accounts.iter().map(|a| a.vote_pubkey).collect();
+    if members.len() != accounts.len() {
+        return Err(format!("epoch {epoch} lists a vote account twice"));
+    }
+    Ok(Input {
+        file,
+        members: Some(members),
+    })
 }
 
+/// How a cluster's slots fall into epochs.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EpochSchedule {
+pub struct EpochSchedule {
     slots_per_epoch: u64,
     first_normal_epoch: u64,
     first_normal_slot: u64,
+}
+
+impl EpochSchedule {
+    /// The first slot of `epoch`. Only epochs after warm-up, where every
+    /// epoch has the same length, are supported.
+    pub fn first_slot(&self, epoch: u64) -> Result<u64, String> {
+        epoch
+            .checked_sub(self.first_normal_epoch)
+            .and_then(|epochs| epochs.checked_mul(self.slots_per_epoch))
+            .and_then(|slots| slots.checked_add(self.first_normal_slot))
+            .ok_or_else(|| format!("epoch {epoch} is outside the cluster's epoch schedule"))
+    }
+}
+
+/// Asks the node at `url` for the cluster's epoch schedule.
+pub fn epoch_schedule(rpc: &Rpc, url: &str) -> Result<EpochSchedule, String> {
+    read(
+        "getEpochSchedule",
+        rpc.call(url, "getEpochSchedule", json!([]))?,
+    )
 }
 
 #[derive(Deserialize)]
@@ -138,15 +195,23 @@ struct Context {
 struct RankMap {
     epoch: u64,
     total_stake: u64,
-    validators: Vec<Ranked>,
+    validators: Vec<RankEntry>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Ranked {
+struct RankEntry {
     rank: u64,
+    vote_pubkey: String,
+    node_pubkey: String,
     bls_pubkey_compressed: String,
     stake: u64,
+}
+
+/// Decodes a base-58 string of exactly `N` bytes.
+pub fn unbase58<const N: usize>(text: &str) -> Option<[u8; N]> {
+    let mut out = [0u8; N];
+    (bs58::decode(text).onto(&mut out) == Ok(N)).then_some(out)
 }
 
 #[derive(Deserialize)]
@@ -155,7 +220,8 @@ struct ClusterNode {
     shred_version: Option<u16>,
 }
 
-fn read<T: serde::de::DeserializeOwned>(method: &str, value: Value) -> Result<T, String> {
+/// Reads the `result` of a call to `method` as a `T`.
+pub fn read<T: serde::de::DeserializeOwned>(method: &str, value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|e| format!("{method}: unexpected answer: {e}"))
 }
 
@@ -170,17 +236,9 @@ pub fn set_file_from_rank_map(
     url: &str,
     cluster: &str,
     epoch: u64,
-) -> Result<SetFile, String> {
+) -> Result<RankMapReading, String> {
     let label = host_label(url)?;
-    let schedule: EpochSchedule = read(
-        "getEpochSchedule",
-        rpc.call(url, "getEpochSchedule", json!([]))?,
-    )?;
-    let first_slot = epoch
-        .checked_sub(schedule.first_normal_epoch)
-        .and_then(|epochs| epochs.checked_mul(schedule.slots_per_epoch))
-        .and_then(|slots| slots.checked_add(schedule.first_normal_slot))
-        .ok_or_else(|| format!("epoch {epoch} is outside the cluster's epoch schedule"))?;
+    let first_slot = epoch_schedule(rpc, url)?.first_slot(epoch)?;
 
     let method = "getVatActiveSetRankMap";
     let answer: RankMapAnswer = read(method, rpc.call(url, method, json!([first_slot]))?)?;
@@ -194,20 +252,31 @@ pub fn set_file_from_rank_map(
         ));
     }
     let mut validators = Vec::with_capacity(map.validators.len());
+    let mut ranked = Vec::with_capacity(map.validators.len());
     for (rank, entry) in map.validators.iter().enumerate() {
         if entry.rank != rank as u64 {
             return Err(format!("{method}: ranks are not 0, 1, 2, ... in order"));
         }
-        let mut bls_pubkey = [0u8; 48];
-        let decoded = bs58::decode(&entry.bls_pubkey_compressed).onto(&mut bls_pubkey);
-        if decoded != Ok(48) {
+        let Some(bls_pubkey) = unbase58(&entry.bls_pubkey_compressed) else {
             return Err(format!(
                 "{method}: rank {rank} has a key that is not 48 bytes"
             ));
-        }
+        };
+        let (Some(vote_pubkey), Some(node_pubkey)) =
+            (unbase58(&entry.vote_pubkey), unbase58(&entry.node_pubkey))
+        else {
+            return Err(format!(
+                "{method}: rank {rank} has an account address that is not 32 bytes"
+            ));
+        };
         validators.push(Validator {
             bls_pubkey,
             stake: entry.stake,
+        });
+        ranked.push(Ranked {
+            vote_pubkey,
+            node_pubkey,
+            bls_pubkey,
         });
     }
     // Refuses a list that is not in the cluster's order, so a node cannot
@@ -230,8 +299,9 @@ pub fn set_file_from_rank_map(
 
     let source =
         Source::new(KIND_RANK_MAP, &label, answer.context.slot).map_err(|e| e.to_string())?;
-    SetFile::new(cluster, shred_version, epoch, set.to_bytes(), vec![source])
-        .map_err(|e| e.to_string())
+    let file = SetFile::new(cluster, shred_version, epoch, set.to_bytes(), vec![source])
+        .map_err(|e| e.to_string())?;
+    Ok(RankMapReading { file, ranked })
 }
 
 #[cfg(test)]
@@ -270,7 +340,7 @@ pub mod tests {
         ]
     }
 
-    fn fetch(answers: &[Value]) -> (Result<SetFile, String>, Vec<(String, Value)>) {
+    fn fetch(answers: &[Value]) -> (Result<RankMapReading, String>, Vec<(String, Value)>) {
         let bodies: Vec<String> = answers
             .iter()
             .map(|result| json!({"jsonrpc": "2.0", "id": 1, "result": result}).to_string())
@@ -290,8 +360,15 @@ pub mod tests {
     #[test]
     fn a_rank_map_becomes_the_set_the_verifier_builds() {
         let set = validators();
-        let (file, asked) = fetch(&answers(&set, 20, 9));
-        let file = file.unwrap();
+        let (reading, asked) = fetch(&answers(&set, 20, 9));
+        let RankMapReading { file, ranked } = reading.unwrap();
+        // The accounts behind each rank, kept for the admission check.
+        for (rank, entry) in ranked.iter().enumerate() {
+            assert_eq!(entry.vote_pubkey, [rank as u8; 32]);
+            assert_eq!(entry.node_pubkey, [rank as u8 + 100; 32]);
+            assert_eq!(entry.bls_pubkey, set.validators()[rank].bls_pubkey);
+        }
+        assert_eq!(ranked.len(), 4);
         assert_eq!(file.set_hash(), set.hash());
         assert_eq!(file.set_bytes(), set.to_bytes());
         assert_eq!(
@@ -325,7 +402,9 @@ pub mod tests {
         let refused = |change: &dyn Fn(&mut Vec<Value>), why: &str| {
             let mut answers = good.clone();
             change(&mut answers);
-            let error = fetch(&answers).0.unwrap_err();
+            let Err(error) = fetch(&answers).0 else {
+                panic!("not refused: {why}");
+            };
             assert!(error.contains(why), "{error}");
         };
         refused(&|a| a[1]["value"] = Value::Null, "no rank map for epoch 20");
@@ -341,6 +420,10 @@ pub mod tests {
         refused(
             &|a| a[1]["value"]["validators"][0]["blsPubkeyCompressed"] = json!("abc"),
             "not 48 bytes",
+        );
+        refused(
+            &|a| a[1]["value"]["validators"][1]["votePubkey"] = json!("abc"),
+            "rank 1 has an account address that is not 32 bytes",
         );
         // Stake raised out of order: the verifier's own check of rank order.
         refused(
@@ -405,7 +488,12 @@ pub mod tests {
             json!({"vote_pubkey": hex::encode([60; 32]), "node_pubkey": hex::encode([61; 32]),
                            "bls_pubkey": listed[0]["bls_pubkey"], "stake": 0}),
         );
-        let file = set_file_from_input(&extract(json!(listed)), 8).unwrap();
+        let Input { file, members } = set_file_from_input(&extract(json!(listed)), 8).unwrap();
+        // The members are every account in the map, ranked or not: the
+        // map is what the cluster admitted, and ranking comes after.
+        let mut listed_members: Vec<Pubkey> = (0..4).map(|i| [i; 32]).collect();
+        listed_members.extend([[50; 32], [60; 32]]);
+        assert_eq!(members, Some(listed_members.into_iter().collect()));
         assert_eq!(file.set_hash(), set.hash());
         assert_eq!(
             (file.cluster(), file.epoch(), file.shred_version()),
@@ -420,43 +508,46 @@ pub mod tests {
     #[test]
     fn an_input_without_the_epoch_is_refused() {
         let text = extract(json!(accounts(&validators())));
-        let missing = set_file_from_input(&text, 9).unwrap_err();
+        let refusal = |text: &str, epoch| match set_file_from_input(text, epoch) {
+            Ok(_) => panic!("not refused"),
+            Err(why) => why,
+        };
+        let missing = refusal(&text, 9);
         assert!(
             missing.contains("does not hold epoch 9 once (it holds 7, 8)"),
             "{missing}"
         );
-        let empty = set_file_from_input(&text, 7).unwrap_err();
+        let empty = refusal(&text, 7);
         assert!(empty.contains("does not rank into a set"), "{empty}");
 
-        let set_file = set_file_from_input(&text, 8).unwrap().to_json();
-        assert!(set_file_from_input(&set_file, 8).is_ok());
-        assert_eq!(
-            set_file_from_input(&set_file, 9).unwrap_err(),
-            "is the set for epoch 8"
-        );
+        let set_file = set_file_from_input(&text, 8).unwrap().file.to_json();
+        // A set file lists keys, not vote accounts.
+        assert!(set_file_from_input(&set_file, 8).unwrap().members.is_none());
+        assert_eq!(refusal(&set_file, 9), "is the set for epoch 8");
+
+        let mut twice = accounts(&validators());
+        twice.push(twice[0].clone());
+        assert!(refusal(&extract(json!(twice)), 8).contains("lists a vote account twice"));
     }
 
     #[test]
     fn a_file_of_another_kind_is_refused() {
+        let refusal = |text: &str| match set_file_from_input(text, 8) {
+            Ok(_) => panic!("not refused"),
+            Err(why) => why,
+        };
         for text in ["", "[]", "{}", r#"{"format":7}"#] {
-            assert_eq!(
-                set_file_from_input(text, 8).unwrap_err(),
-                "not a set file or a snapshot extract"
-            );
+            assert_eq!(refusal(text), "not a set file or a snapshot extract");
         }
         assert_eq!(
-            set_file_from_input(r#"{"format":"solana-thin/set/v9"}"#, 8).unwrap_err(),
+            refusal(r#"{"format":"solana-thin/set/v9"}"#),
             r#"unknown format "solana-thin/set/v9""#
         );
         let unknown_field = extract(json!([])).replace(r#""slot":4242"#, r#""slot":4242,"x":1"#);
-        assert!(set_file_from_input(&unknown_field, 8)
-            .unwrap_err()
-            .contains("unknown field"));
+        assert!(refusal(&unknown_field).contains("unknown field"));
         let bad_key = extract(
             json!([{"vote_pubkey": "zz", "node_pubkey": "", "bls_pubkey": null, "stake": 1}]),
         );
-        assert!(set_file_from_input(&bad_key, 8)
-            .unwrap_err()
-            .contains("vote_pubkey is not 32 bytes of hex"));
+        assert!(refusal(&bad_key).contains("vote_pubkey is not 32 bytes of hex"));
     }
 }

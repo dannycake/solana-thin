@@ -1,10 +1,11 @@
 //! Command-line arguments: `--flag value` pairs and bare paths.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The arguments of one subcommand, taken apart.
 pub struct Args {
     flags: BTreeMap<String, Vec<String>>,
+    switches: BTreeSet<String>,
     positional: Vec<String>,
 }
 
@@ -12,7 +13,18 @@ impl Args {
     /// Splits `args`. Only the flags named in `known` are accepted, and each
     /// takes one value.
     pub fn parse(args: impl Iterator<Item = String>, known: &[&str]) -> Result<Self, String> {
+        Self::parse_with_switches(args, known, &[])
+    }
+
+    /// As [`parse`](Self::parse), and also accepts the flags named in
+    /// `switches`, which take no value.
+    pub fn parse_with_switches(
+        args: impl Iterator<Item = String>,
+        known: &[&str],
+        switches: &[&str],
+    ) -> Result<Self, String> {
         let mut flags: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut given = BTreeSet::new();
         let mut positional = Vec::new();
         let mut args = args;
         while let Some(arg) = args.next() {
@@ -20,6 +32,10 @@ impl Args {
                 positional.push(arg);
                 continue;
             };
+            if switches.contains(&name) {
+                given.insert(name.to_string());
+                continue;
+            }
             if !known.contains(&name) {
                 return Err(format!("unknown option --{name}"));
             }
@@ -28,7 +44,16 @@ impl Args {
                 .ok_or_else(|| format!("--{name} needs a value"))?;
             flags.entry(name.to_string()).or_default().push(value);
         }
-        Ok(Self { flags, positional })
+        Ok(Self {
+            flags,
+            switches: given,
+            positional,
+        })
+    }
+
+    /// Whether a flag that takes no value was given.
+    pub fn switch(&self, name: &str) -> bool {
+        self.switches.contains(name)
     }
 
     /// Every value given for a flag that may repeat.
@@ -95,6 +120,24 @@ mod tests {
         assert_eq!(args.all("url"), ["x", "y"]);
         assert!(args.optional("url").is_err());
         assert!(args.no_positional().is_err());
+    }
+
+    #[test]
+    fn a_switch_takes_no_value() {
+        let args = Args::parse_with_switches(
+            ["--skip", "a.json", "--quorum", "3"]
+                .iter()
+                .map(|a| a.to_string()),
+            &["quorum"],
+            &["skip"],
+        )
+        .unwrap();
+        assert!(args.switch("skip"));
+        assert!(!args.switch("other"));
+        assert_eq!(args.positional(), ["a.json"]);
+        assert_eq!(args.number::<usize>("quorum"), Ok(3));
+        // Only where it is known.
+        assert!(parse(&["--skip"], &["quorum"]).is_err());
     }
 
     #[test]

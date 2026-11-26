@@ -2,6 +2,7 @@
 //!
 //! See `docs/SETS.md` for the procedure and for what each step is worth.
 
+mod admission;
 mod args;
 mod sources;
 
@@ -10,8 +11,9 @@ use solana_thin::ValidatorSet;
 use solana_thin_setlog::rpc;
 use solana_thin_setlog::{
     agree, check_links, parse, signer_key_from_hex, to_text, verify, Error, SetFile, SignedRecord,
-    SignerKey, SigningKey,
+    SignerKey, SigningKey, Source, KIND_ADMISSION,
 };
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -20,18 +22,30 @@ use std::process::ExitCode;
 /// The environment variable the signing key is read from: 64 hex digits.
 const KEY_VARIABLE: &str = "SETLOG_SIGNING_KEY";
 
+/// The node the admission debits are read from.
+const ADMISSION_URL: &str = "admission-url";
+/// Skips the admission check, and leaves it out of the record.
+const NO_ADMISSION_CHECK: &str = "no-admission-check";
+
 const USAGE: &str = "\
 setlog: a signed, hash-chained log of Solana validator-set hashes
 
 Reading a set and checking that sources agree:
   setlog from-rank-map --cluster <name> --epoch <E> --url <rpc> [--url <rpc> ...]
                        --quorum <N> --set <out> --record <out> [--log <log>]
+                       [--admission-url <rpc> | --no-admission-check]
   setlog agree --epoch <E> --quorum <N> --set <out> --record <out> [--log <log>]
+               (--admission-url <rpc> | --no-admission-check)
                <set file or snapshot extract> ...
 
-  Both print the set hash each source gives. Only if every source gives the
-  same set, and at least N distinct sources did, they write the set file and
-  a record for it: unsigned, and linked to the end of <log> if one is given.
+  Both print the set hash each source gives, and check the vote accounts
+  each source names against those charged the admission ticket in the first
+  block of epoch E - 1, read from --admission-url (for from-rank-map, the
+  first --url if not given). Only if every source gives the same set, every
+  source's accounts match, and at least N distinct sources agree, they write
+  the set file and a record for it: unsigned, and linked to the end of <log>
+  if one is given. --no-admission-check skips the check, and the record then
+  does not claim it.
 
 Signing and publishing:
   setlog keygen                      print a new signing key; its public half
@@ -153,10 +167,51 @@ fn describe(file: &SetFile) -> String {
     )
 }
 
+/// The node to read the admission debits from, or `None` if the check is
+/// skipped. The check is on unless skipped by name.
+fn admission_url<'a>(args: &'a Args, default: Option<&'a str>) -> Result<Option<&'a str>, String> {
+    let given = args.optional(ADMISSION_URL)?;
+    if args.switch(NO_ADMISSION_CHECK) {
+        return match given {
+            Some(_) => Err("give --admission-url or --no-admission-check, not both".into()),
+            None => Ok(None),
+        };
+    }
+    let url = given
+        .or(default)
+        .ok_or("--admission-url is required, or --no-admission-check to skip the check")?;
+    rpc::host_label(url)?;
+    Ok(Some(url))
+}
+
+fn fetch_debits(rpc: &rpc::Rpc, url: &str, epoch: u64) -> Result<admission::Debits, String> {
+    let host = rpc::host_label(url)?;
+    let debits = admission::fetch(rpc, url, epoch)
+        .map_err(|e| format!("no admission debits from {host}: {e}"))?;
+    println!(
+        "admission: the block at slot {} debited {} vote accounts, from {host}; \
+         it is the first of epoch {}",
+        debits.slot,
+        debits.accounts.len(),
+        epoch - 1
+    );
+    Ok(debits)
+}
+
 fn from_rank_map(args: impl Iterator<Item = String>) -> Outcome {
-    let args = Args::parse(
+    let args = Args::parse_with_switches(
         args,
-        &["cluster", "epoch", "url", "quorum", "set", "record", "log"],
+        &[
+            "cluster",
+            "epoch",
+            "url",
+            "quorum",
+            "set",
+            "record",
+            "log",
+            ADMISSION_URL,
+        ],
+        &[NO_ADMISSION_CHECK],
     )?;
     args.no_positional()?;
     let cluster = args.required("cluster")?;
@@ -165,52 +220,141 @@ fn from_rank_map(args: impl Iterator<Item = String>) -> Outcome {
     if urls.is_empty() {
         return Err("--url is required".into());
     }
+    let admission_url = admission_url(&args, urls.first().map(String::as_str))?;
     let curl = rpc::Curl::new("setlog");
     let rpc = rpc::Rpc::polite(&curl);
-    let mut inputs = Vec::new();
+    let mut readings = Vec::new();
     for url in urls {
         // Only the host is ever printed: the rest of a URL can hold a key.
         let label = rpc::host_label(url)?;
         match sources::set_file_from_rank_map(&rpc, url, cluster, epoch) {
-            Ok(file) => {
+            Ok(reading) => {
                 println!(
                     "rank-map {label} at slot {}: {}",
-                    file.sources()[0].slot(),
-                    describe(&file)
+                    reading.file.sources()[0].slot(),
+                    describe(&reading.file)
                 );
-                inputs.push(file);
+                readings.push((label, reading));
             }
             // A node that cannot answer is not a node that disagrees.
             Err(why) => println!("rank-map {label}: no answer: {why}"),
         }
     }
-    conclude(&args, inputs)
+    let inputs = readings.iter().map(|(_, r)| r.file.clone()).collect();
+    conclude(&args, inputs, || {
+        let Some(url) = admission_url else {
+            return Ok(None);
+        };
+        let debits = fetch_debits(&rpc, url, epoch)?;
+        for (label, reading) in &readings {
+            let left_out = admission::check_rank_map(&debits, &reading.ranked, |accounts| {
+                admission::keys_now(&rpc, url, accounts)
+            })
+            .map_err(|e| format!("rank-map {label}: {e}"))?;
+            let ranked = reading.ranked.len();
+            if left_out == 0 {
+                println!("admission: rank-map {label} ranks the {ranked} accounts debited");
+            } else {
+                println!(
+                    "admission: rank-map {label}: its {ranked} ranked accounts were all debited; \
+                     the {left_out} debited accounts it does not rank share a BLS key or node \
+                     identity, by their vote accounts now"
+                );
+            }
+        }
+        Ok(Some(debits.source()))
+    })
 }
 
 fn agree_inputs(args: impl Iterator<Item = String>) -> Outcome {
-    let args = Args::parse(args, &["epoch", "quorum", "set", "record", "log"])?;
+    let args = Args::parse_with_switches(
+        args,
+        &["epoch", "quorum", "set", "record", "log", ADMISSION_URL],
+        &[NO_ADMISSION_CHECK],
+    )?;
     let epoch: u64 = args.number("epoch")?;
+    let admission_url = admission_url(&args, None)?;
     let mut inputs = Vec::new();
     for path in args.positional() {
-        let file = sources::set_file_from_input(&read(path)?, epoch)
+        let input = sources::set_file_from_input(&read(path)?, epoch)
             .map_err(|why| format!("{path}: {why}"))?;
-        for source in file.sources() {
+        for source in input.file.sources() {
+            if source.kind() == KIND_ADMISSION {
+                continue;
+            }
             println!(
                 "{} {} at slot {}: {}",
                 source.kind(),
                 source.label(),
                 source.slot(),
-                describe(&file)
+                describe(&input.file)
             );
         }
-        inputs.push(file);
+        inputs.push((path, input));
     }
-    conclude(&args, inputs)
+    let files = inputs.iter().map(|(_, input)| input.file.clone()).collect();
+    conclude(&args, files, || {
+        let Some(url) = admission_url else {
+            return Ok(None);
+        };
+        let curl = rpc::Curl::new("setlog");
+        let debits = fetch_debits(&rpc::Rpc::polite(&curl), url, epoch)?;
+        // Every input is the same set by now, so one input whose accounts
+        // match is enough; every input that names accounts must match.
+        let mut checked = 0;
+        for (path, input) in &inputs {
+            if let Some(members) = &input.members {
+                admission::check_map(&debits, members).map_err(|e| format!("{path}: {e}"))?;
+                println!(
+                    "admission: {path}: its {} vote accounts are the ones debited",
+                    members.len()
+                );
+                checked += 1;
+                continue;
+            }
+            let carried = input
+                .file
+                .sources()
+                .iter()
+                .find(|s| s.kind() == KIND_ADMISSION);
+            match carried {
+                Some(source) if source.slot() == debits.slot => {
+                    println!("admission: {path}: a set file checked against this block");
+                    checked += 1;
+                }
+                Some(source) => {
+                    return Err(format!(
+                        "{path}: a set file checked against the block at slot {}, not {}",
+                        source.slot(),
+                        debits.slot
+                    ))
+                }
+                None => println!(
+                    "admission: {path}: a set file, which names no vote accounts to compare"
+                ),
+            }
+        }
+        if checked == 0 {
+            return Err(
+                "no input lists the vote accounts to compare with the debits: a set \
+                        file holds keys, not accounts. Add a snapshot extract or a set file \
+                        made with the check, or pass --no-admission-check"
+                    .into(),
+            );
+        }
+        Ok(Some(debits.source()))
+    })
 }
 
 /// The common end of `from-rank-map` and `agree`: refuse unless the sources
-/// agree, then write the set file and the candidate record.
-fn conclude(args: &Args, inputs: Vec<SetFile>) -> Outcome {
+/// agree and `admission` passes, then write the set file and the candidate
+/// record. `admission` checks the members and returns the source that says
+/// so, or `None` if the check was skipped.
+fn conclude(
+    args: &Args,
+    inputs: Vec<SetFile>,
+    admission: impl FnOnce() -> Result<Option<Source>, String>,
+) -> Outcome {
     let quorum: usize = args.number("quorum")?;
     let (set_path, record_path) = (args.required("set")?, args.required("record")?);
     // Before anything is written, so that it is both files or neither.
@@ -233,6 +377,30 @@ fn conclude(args: &Args, inputs: Vec<SetFile>) -> Outcome {
     } else {
         check_links(&log).map_err(|e| format!("the log does not hold together: {e}"))?
     };
+
+    let checked = admission().map_err(|e| format!("nothing written: {e}"))?;
+    if checked.is_none() {
+        println!("admission: not checked (--{NO_ADMISSION_CHECK}); the record will not claim it");
+    }
+    // The record says what this run checked: a check an input carries in
+    // is replaced, or dropped if this run made none.
+    let mut sources: Vec<Source> = agreed
+        .sources()
+        .iter()
+        .filter(|s| s.kind() != KIND_ADMISSION)
+        .cloned()
+        .collect();
+    let readings = sources.len();
+    sources.extend(checked);
+    let agreed = SetFile::new(
+        agreed.cluster(),
+        agreed.shred_version(),
+        agreed.epoch(),
+        agreed.set_bytes().to_vec(),
+        sources,
+    )
+    .map_err(|e| format!("nothing written: {e}"))?;
+
     let record = agreed.candidate(prev).map_err(|e| e.to_string())?;
     log.push(SignedRecord::unsigned(record));
     check_links(&log)
@@ -242,8 +410,8 @@ fn conclude(args: &Args, inputs: Vec<SetFile>) -> Outcome {
     write_new(set_path, &agreed.to_json())?;
     write_new(record_path, &to_text(std::slice::from_ref(candidate)))?;
     println!(
-        "agreed: {} sources give epoch {} of {} (shred version {}) the set {}, total stake {}",
-        agreed.sources().len(),
+        "agreed: {readings} sources give epoch {} of {} (shred version {}) the set {}, \
+         total stake {}",
         agreed.epoch(),
         agreed.cluster(),
         agreed.shred_version(),
@@ -252,6 +420,30 @@ fn conclude(args: &Args, inputs: Vec<SetFile>) -> Outcome {
     );
     println!("wrote {set_path} and {record_path} (unsigned)");
     Ok(())
+}
+
+/// Prints a file's sources, the admission check apart from the readings.
+fn print_sources(sources: &[Source]) {
+    let mut checked = false;
+    for source in sources {
+        if source.kind() == KIND_ADMISSION {
+            checked = true;
+            println!(
+                "  members checked against the admission debits in the block at slot {}",
+                source.slot()
+            );
+        } else {
+            println!(
+                "  source {} {} at slot {}",
+                source.kind(),
+                source.label(),
+                source.slot()
+            );
+        }
+    }
+    if !checked {
+        println!("  members not checked against the admission debits");
+    }
 }
 
 fn signing_key() -> Result<SigningKey, String> {
@@ -374,6 +566,17 @@ fn verify_log(args: impl Iterator<Item = String>) -> Outcome {
         log.cluster(),
         signers.len()
     );
+    // The block each epoch's members were checked against, from the latest
+    // record for the epoch that names one.
+    let mut checked: BTreeMap<u64, u64> = BTreeMap::new();
+    for signed in &records {
+        let record = signed.record();
+        for source in record.sources() {
+            if source.kind() == KIND_ADMISSION {
+                checked.insert(record.epoch(), source.slot());
+            }
+        }
+    }
     for (epoch, pin) in log.pins() {
         println!(
             "epoch {epoch}: pin {} ({} validators, shred version {})",
@@ -381,6 +584,12 @@ fn verify_log(args: impl Iterator<Item = String>) -> Outcome {
             pin.validators,
             pin.shred_version
         );
+        match checked.get(epoch) {
+            Some(slot) => println!(
+                "  members checked against the admission debits in the block at slot {slot}"
+            ),
+            None => println!("  members not checked against the admission debits"),
+        }
     }
     println!("head {}", hex::encode(log.head()));
     Ok(())
@@ -404,14 +613,7 @@ fn show(args: impl Iterator<Item = String>) -> Outcome {
             Ok(valid) => println!("  a valid ranked set, total stake {}", valid.total_stake()),
             Err(why) => println!("  NOT a set the verifier accepts: {why}"),
         }
-        for source in set.sources() {
-            println!(
-                "  source {} {} at slot {}",
-                source.kind(),
-                source.label(),
-                source.slot()
-            );
-        }
+        print_sources(set.sources());
         return Ok(());
     }
     let records = parse(&text).map_err(|e| in_file(path, e))?;
@@ -430,14 +632,7 @@ fn show(args: impl Iterator<Item = String>) -> Outcome {
             hex::encode(record.set_hash()),
             record.validators()
         );
-        for source in record.sources() {
-            println!(
-                "  source {} {} at slot {}",
-                source.kind(),
-                source.label(),
-                source.slot()
-            );
-        }
+        print_sources(record.sources());
         let linked = if index == 0 && record.prev() == &prev {
             "starts a log"
         } else if index == 0 {
