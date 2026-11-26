@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # sha2 0.11 needs Rust 1.88. Taking it means raising the crate's
+      # minimum Rust version, which is a decision, not a routine bump.
+      - dependency-name: sha2
+        versions: [">=0.11"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # The ref of this action is a Rust version. One CI job pins it to the
+      # crate's minimum on purpose; the other uses `stable`.
+      - dependency-name: dtolnay/rust-toolchain

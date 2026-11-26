@@ -1,0 +1,114 @@
+# The fast checks, on every push. The checks that link Agave (the oracle,
+# the fuzzers, the third-party fixtures) are too heavy for this and run
+# nightly on a development machine; see scripts/nightly.sh.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  # The verifier alone. The bindings bring some fifty more crates to compile
+  # and have a job of their own, so that this one stays as quick as it was.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p solana-thin --all-targets --all-features -- -D warnings
+      # Default features leave blst its thread pool; --all-features turns it
+      # off, and makes blst choose its instructions when it runs.
+      - run: cargo test -p solana-thin
+      - run: cargo test -p solana-thin --all-features
+      - run: cargo doc -p solana-thin --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo run --example anchor --features testkit
+  msrv:
+    name: Rust 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      # The verifier and the set log by name, not the workspace: what the
+      # bindings and their generator need from a compiler is theirs to state,
+      # in the jobs below.
+      - run: cargo test -p solana-thin -p solana-thin-setlog --all-features
+  package:
+    name: Published crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The crate as published has to pass its tests away from the repository.
+      - run: cargo package -p solana-thin --no-verify
+      - run: |
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xzf target/package/solana-thin-*.crate -C "$RUNNER_TEMP/unpacked"
+          cd "$RUNNER_TEMP"/unpacked/solana-thin-*
+          cargo test
+          cargo test --features testkit
+  # Everything but the verifier: the bindings, the set log and the prover.
+  bindings:
+    name: Kotlin and Swift bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --exclude solana-thin
+      - run: cargo test --workspace --exclude solana-thin --all-features
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The exported interface against its checked-in copy, then the Kotlin
+      # smoke test on the JVM. The runner image carries a JDK and kotlinc;
+      # without them this fails, it does not skip.
+      - run: scripts/bindings.sh --require-jvm
+  bindings-msrv:
+    name: Bindings, Rust 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      # The two libraries by name. The generator (crates/uniffi-bindgen) is a
+      # tool for the build machine and follows stable.
+      - run: cargo test -p solana-thin-ffi -p solana-thin-wasm
+  prover-msrv:
+    name: Prover, Rust 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      # The prover keeps the verifier's Rust version: nothing it depends on
+      # asks for a newer one. On stable the workspace job lints, tests and
+      # documents it with everything else. Its tests talk to validators on
+      # loopback and reach a local stand-in for an RPC node with the
+      # runner's curl.
+      - run: curl --version
+      - run: cargo test -p solana-thin-prover
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+      # blst is C: both steps need the clang and the node of the runner image.
+      - run: clang --version && node --version
+      # Builds the verifier for wasm32-unknown-unknown and verifies a mainnet
+      # proof in the module under node.
+      - run: scripts/wasm.sh
+      # The verifier's test suite as a WASI program under node.
+      - run: scripts/wasi-test.sh
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

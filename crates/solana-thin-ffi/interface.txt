@@ -1,0 +1,34 @@
+namespace solana_thin_ffi
+record VerifiedTransaction
+  slot: u64
+  block_id: bytes
+  epoch: u64
+  transaction_id: bytes
+  block_time_nanos: u64?
+  finality: Finality
+  memos: [bytes]
+enum Finality
+  Fast
+  Slow
+enum VerifyError
+  Malformed { detail: string }
+  Unsupported { detail: string }
+  LimitExceeded { detail: string }
+  InvalidValidatorSet { detail: string }
+  EpochNotPinned { detail: string, epoch: u64? }
+  CertificateRejected { detail: string }
+  ProofRejected { detail: string }
+  WrongTransaction { detail: string }
+  UnprovableBlock { detail: string }
+  InvalidParameters { detail: string }
+  Other { detail: string }
+object Verifier
+  constructor mainnet(shred_version: u16) -> Verifier
+  constructor with_warmup(shred_version: u16, slots_per_epoch: u64) -> Verifier throws VerifyError
+  constructor without_warmup(shred_version: u16, slots_per_epoch: u64) -> Verifier throws VerifyError
+  method forget_epoch(epoch: u64) -> bool
+  method forget_epochs_before(epoch: u64) -> u64
+  method pin_validator_set(epoch: u64, set: bytes, pinned_hash: bytes) throws VerifyError
+  method pinned_epochs() -> [u64]
+  method verify_signature(proof: bytes, signature: bytes) -> VerifiedTransaction throws VerifyError
+  method verify_transaction(proof: bytes) -> VerifiedTransaction throws VerifyError

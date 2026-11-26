@@ -1,0 +1,24 @@
+# Runs the Firedancer shred-parse conformance fixtures through solana-thin.
+#
+# Its own workspace, like tools/agave-fixtures: it pulls in protobuf and
+# archive crates the library has no use for. The fixtures themselves are
+# downloaded at run time and are never part of this repository.
+[package]
+name = "shred-fixtures"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+solana-thin = { path = "../../crates/solana-thin" }
+# The fixture schema (org.solana.sealevel.v1), as pre-generated prost types.
+protosol = "=18.0.0"
+prost = "0.14"
+sha2 = "0.10"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

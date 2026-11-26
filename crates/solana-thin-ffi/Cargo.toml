@@ -1,0 +1,41 @@
+[package]
+name = "solana-thin-ffi"
+description = "Kotlin and Swift bindings for solana-thin, generated with UniFFI."
+version.workspace = true
+edition.workspace = true
+# Its own, not the workspace's. UniFFI states no minimum and can raise the
+# one it has in any release; when it does, this moves and the verifier's
+# stays. CI holds each to its number in a job of its own.
+rust-version = "1.85"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "solana_thin_ffi"
+# cdylib: what Android and the JVM load. staticlib: what an XCFramework
+# carries. lib: for this crate's own tests.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = ["no-threads"]
+# On by default: a phone app should not find a thread pool it did not start.
+# Cargo features only add, so the way to let blst use its pool is to build
+# with `--no-default-features`.
+no-threads = ["solana-thin/no-threads"]
+# See the same feature of `solana-thin`. Wanted for x86-64 builds that run on
+# another machine, such as an Android emulator image.
+portable = ["solana-thin/portable"]
+
+[dependencies]
+solana-thin = { path = "../solana-thin", version = "0.1.0" }
+# Without its default feature, which reads `cargo metadata` and is only of
+# use to the binding generator.
+uniffi = { version = "0.32", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"
+hex = "0.4"
+
+[lints.rust]
+missing_docs = "warn"

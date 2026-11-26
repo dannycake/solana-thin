@@ -1,0 +1,19 @@
+[package]
+name = "uniffi-bindgen"
+description = "The UniFFI binding generator, at the version solana-thin-ffi is built with."
+version.workspace = true
+edition.workspace = true
+# What the generator's dependencies ask for at the locked versions. It is a
+# tool for the machine that builds bindings, so it follows stable.
+rust-version = "1.91"
+license.workspace = true
+repository.workspace = true
+publish = false
+default-run = "uniffi-bindgen"
+
+[dependencies]
+uniffi = { version = "0.32", features = ["cli"] }
+# For `describe-interface`. All three are in the generator already.
+uniffi_bindgen = "0.32"
+anyhow = "1"
+camino = "1"

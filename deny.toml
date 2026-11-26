@@ -1,0 +1,53 @@
+# cargo deny: fails on a known vulnerability, an unwanted license, or a crate
+# from anywhere but crates.io. Run by CI and by `cargo deny check` locally.
+# It covers the main workspace: the verifier, the bindings, the binding
+# generator, the set log and the prover. tools/ and fuzz/ are their own
+# workspaces with their own locks and are not shipped.
+#
+# The set log's tool and the prover talk to RPC nodes over HTTPS by running
+# the system's curl, so no TLS stack is in this tree and none of its
+# licenses had to be allowed.
+
+[advisories]
+version = 2
+ignore = [
+    # Unmaintained, not vulnerable. It is a build-time dependency of the
+    # template engine inside UniFFI's binding generator (crates/uniffi-bindgen),
+    # which runs on a developer's machine and is in no library this
+    # repository ships. Drop this once UniFFI's generator no longer pulls it.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml, reached only through the binding generator's templates" },
+]
+
+[licenses]
+version = 2
+# What the verifier's dependency tree carries today (blst, sha2 and what they
+# pull in). Anything else is a decision, not a default.
+allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
+confidence-threshold = 0.9
+
+# UniFFI is MPL-2.0. Its runtime (uniffi, uniffi_core, and the macros'
+# output) is linked into solana-thin-ffi; the rest is the generator and what
+# it builds with. MPL-2.0 asks that changes to UniFFI's own files be
+# published and leaves this repository's license alone. Allowed for these
+# crates by name and for nothing else, and never in the verifier itself.
+exceptions = [
+    { crate = "uniffi", allow = ["MPL-2.0"] },
+    { crate = "uniffi_bindgen", allow = ["MPL-2.0"] },
+    { crate = "uniffi_core", allow = ["MPL-2.0"] },
+    { crate = "uniffi_internal_macros", allow = ["MPL-2.0"] },
+    { crate = "uniffi_macros", allow = ["MPL-2.0"] },
+    { crate = "uniffi_meta", allow = ["MPL-2.0"] },
+    { crate = "uniffi_pipeline", allow = ["MPL-2.0"] },
+    { crate = "uniffi_udl", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The crate depends on itself with the testkit feature for its own tests.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

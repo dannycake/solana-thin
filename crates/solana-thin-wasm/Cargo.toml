@@ -1,0 +1,23 @@
+[package]
+name = "solana-thin-wasm"
+description = "The solana-thin verifier as a bare WebAssembly module with a small JavaScript wrapper. A check that the verifier runs in a JavaScript engine, not a published package."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "solana_thin_wasm"
+crate-type = ["cdylib"]
+
+[dependencies]
+solana-thin = { path = "../solana-thin", version = "0.1.0" }
+
+[dev-dependencies]
+serde_json = "1"
+hex = "0.4"
+
+[lints.rust]
+missing_docs = "warn"

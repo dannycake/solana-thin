@@ -1,0 +1,94 @@
+# Fuzz targets (docs: the plan's "Fuzzing without the Agave build"): everything in solana-thin
+# that reads bytes from an untrusted prover, and the two byte formats it must read exactly the
+# way a validator does, checked against the validator's own parsers as published on crates.io:
+# those of the release mainnet runs, and in the targets named `*_45` those of the next one.
+# Its own workspace, so the oracles' dependency tree and minimum Rust version stay out of the
+# main one. Built by cargo-fuzz with nightly: `scripts/fuzz.sh`.
+[package]
+name = "solana-thin-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+solana-thin = { path = "../crates/solana-thin", features = ["testkit"] }
+# The oracles, pinned to what Agave 4.4.1 resolves (tools/agave-fixtures/Cargo.lock).
+agave-transaction-view = "=7.0.0"
+solana-signer-store = "=0.1.0"
+solana-transaction = { version = "=5.0.0", features = ["wincode"] }
+# The same two parsers as Agave 4.5 resolves them (the Cargo.lock of v4.5.0-beta.0), renamed so
+# that both releases link into one workspace.
+agave-transaction-view-45 = { package = "agave-transaction-view", version = "=10.1.0" }
+solana-transaction-45 = { package = "solana-transaction", version = "=6.0.0", features = ["wincode"] }
+# One wincode for both releases, the one 4.5 resolves (4.4.1 resolves 0.6.1): cargo links a
+# single 0.6.x. For the same reason the crates both releases share, solana-hash and
+# solana-pubkey among them, are in Cargo.lock at the versions the newer oracles ask for.
+wincode = "=0.6.3"
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+# One [[bin]] per fuzz target: `cargo fuzz list` reads these. src/bin/seed_corpus.rs is found by
+# cargo on its own and is deliberately not listed here, so it is never mistaken for a target.
+[[bin]]
+name = "proof_verify"
+path = "fuzz_targets/proof_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_view"
+path = "fuzz_targets/transaction_view.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_wincode"
+path = "fuzz_targets/transaction_wincode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_view_45"
+path = "fuzz_targets/transaction_view_45.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_wincode_45"
+path = "fuzz_targets/transaction_wincode_45.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bitmap"
+path = "fuzz_targets/bitmap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "marker"
+path = "fuzz_targets/marker.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validator_set"
+path = "fuzz_targets/validator_set.rs"
+test = false
+doc = false
+bench = false

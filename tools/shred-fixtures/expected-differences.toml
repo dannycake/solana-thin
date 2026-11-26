@@ -1,0 +1,14 @@
+# Differences from the reference that are intended.
+#
+# `shred-fixtures` exits non-zero when the light client accepts a shred the
+# reference rejects, or when a completed FEC set's Merkle root differs. An
+# entry here turns one such class into a reported, passing row. Every entry
+# needs a `reason`, and an entry that matches nothing is called out in the
+# summary so stale ones do not linger.
+#
+#   [[difference]]
+#   kind    = "accepts-rejected"        # or "fec-root"
+#   class   = "<the class, exactly as the summary prints it>"
+#   fixture = "<file name>.fix"         # optional: only this fixture
+#   shred   = 12                        # optional: only this shred of it
+#   reason  = "why the light client is right to differ"

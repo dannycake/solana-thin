@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/solana-thin",
+    "crates/solana-thin-ffi",
+    "crates/solana-thin-prover",
+    "crates/solana-thin-setlog",
+    "crates/solana-thin-wasm",
+    "crates/uniffi-bindgen",
+]
+# A plain `cargo build` or `cargo test` is the verifier alone, on Rust 1.85.
+# The bindings need a newer compiler and many more crates: name them with
+# `-p`, or pass `--workspace`.
+default-members = ["crates/solana-thin"]
+# tools/agave-fixtures links the real validator and is built on its own.
+exclude = ["tools"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/dannycake/solana-thin"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.test]
+opt-level = 2

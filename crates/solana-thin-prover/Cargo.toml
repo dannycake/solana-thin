@@ -1,0 +1,35 @@
+[package]
+name = "solana-thin-prover"
+description = "A small node that fetches finalized Solana blocks from validators over the repair protocol and serves proofs that a transaction is in one."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["solana", "light-client", "alpenglow", "prover", "repair"]
+categories = ["cryptography::cryptocurrencies"]
+
+[dependencies]
+solana-thin = { path = "../solana-thin", version = "0.1.0" }
+# For set files and logs, and for its JSON-RPC client.
+solana-thin-setlog = { path = "../solana-thin-setlog", version = "0.1.0", features = ["rpc"] }
+# Signs repair requests with a key made at start and never stored. Already
+# in the tree for the set log, pure Rust, no dependencies of its own.
+ed25519-compact = { version = "2.6", default-features = false, features = ["std"] }
+# The seed of that key. Asked for directly: through ed25519-compact it comes
+# with its browser backend and a dozen crates behind that.
+getrandom = "0.4"
+bs58 = "0.5"
+hex = "0.4"
+serde_json = "1"
+
+[dev-dependencies]
+solana-thin = { path = "../solana-thin", features = ["testkit"] }
+
+[[bin]]
+name = "prover"
+path = "src/bin/prover/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

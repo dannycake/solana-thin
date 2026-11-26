@@ -1,0 +1,53 @@
+[package]
+name = "solana-thin-setlog"
+description = "A signed, hash-chained log of Solana validator-set hashes, one record per epoch, for a thin client to check before it pins a set."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["solana", "light-client", "alpenglow", "ed25519", "transparency-log"]
+categories = ["cryptography::cryptocurrencies"]
+
+[features]
+default = []
+# The `setlog` binary: reads sets from RPC nodes and from snapshot extracts,
+# checks that sources agree, signs and appends. A client that only checks a
+# log leaves this off and gets no network code and none of the verifier.
+cli = ["rpc", "dep:solana-thin", "dep:bs58", "dep:getrandom"]
+# JSON-RPC calls to a node, made by running the system's `curl`. Shared by
+# the tools that read from a cluster; it adds no dependency.
+rpc = []
+
+[dependencies]
+# Pure Rust and no dependencies of its own. The usual choice, ed25519-dalek,
+# is BSD-3-Clause, which deny.toml does not allow.
+ed25519-compact = { version = "2.6", default-features = false, features = ["std"] }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = { version = "0.10", default-features = false }
+solana-thin = { path = "../solana-thin", version = "0.1.0", optional = true }
+bs58 = { version = "0.5", optional = true }
+# For `setlog keygen` only. Asked for directly: through ed25519-compact it
+# comes with its browser backend and a dozen crates behind that.
+getrandom = { version = "0.4", optional = true }
+
+[dev-dependencies]
+solana-thin = { path = "../solana-thin", features = ["testkit"] }
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+bs58 = "0.5"
+
+[[bin]]
+name = "setlog"
+required-features = ["cli"]
+
+[[test]]
+name = "cli"
+required-features = ["cli"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

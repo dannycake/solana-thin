@@ -1,0 +1,78 @@
+[package]
+name = "solana-thin"
+description = "A thin client for Solana after Alpenglow: verify that a block is final and that your transaction is in it, from a small proof."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["solana", "light-client", "alpenglow", "bls", "merkle"]
+categories = ["cryptography::cryptocurrencies"]
+# Tests that read the repository around the crate (docs/, scripts/) cannot run
+# from a published package, so they are not in it.
+exclude = ["tests/conformance_ledger.rs", "tests/nightly_script.rs"]
+
+[features]
+default = []
+# Deterministic block and validator builders used by the test suite and examples.
+# Never needed by a verifier.
+testkit = []
+# Checks a certificate against an older validator set when the right one has
+# not been pinned. UNSOUND: its safety argument has a counterexample, see
+# docs/DESIGN.md ("Stale-set mode"). Off by default; never enable it where a
+# wrong answer costs anything.
+unsound-stale-set = []
+# Passed through to `blst`. Without `no-threads`, blst checks signatures on a
+# thread pool it starts the first time one is checked; with it, all work stays
+# on the calling thread. A phone or an embedded host usually wants it on.
+# Targets that have no threads (wasm32, bare metal) get it without asking.
+no-threads = ["blst/no-threads"]
+# Passed through to `blst`. On x86-64, blst is otherwise built for the machine
+# that compiles it: with ADX instructions if that machine has them, and then
+# it stops with an illegal instruction on a CPU that does not. With `portable`
+# the choice is made when the code runs. Turn it on for any binary that is
+# built on one machine and run on another.
+portable = ["blst/portable"]
+
+[dependencies]
+blst = { version = "0.3.14", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+solana-thin = { path = ".", features = ["testkit"] }
+serde_json = "1"
+hex = "0.4"
+blst = { version = "0.3.14", default-features = false }
+
+[[example]]
+name = "anchor"
+required-features = ["testkit"]
+
+# These tests build their blocks and validators with the testkit. In a
+# checkout the dev-dependency on this crate turns it on. A published package
+# has that dependency stripped: there `cargo test --features testkit` runs
+# them, and a plain `cargo test` leaves them out instead of failing to compile.
+[[test]]
+name = "attacks"
+required-features = ["testkit"]
+
+[[test]]
+name = "end_to_end"
+required-features = ["testkit"]
+
+[[test]]
+name = "ledger_rules"
+required-features = ["testkit"]
+
+[[test]]
+name = "oracle_corpus"
+required-features = ["testkit"]
+
+[[test]]
+name = "properties"
+required-features = ["testkit"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
