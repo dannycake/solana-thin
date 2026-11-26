@@ -35,6 +35,25 @@ independent one later found none; both are in [docs/NOTES.md](docs/NOTES.md).
 Do not put money behind it until someone other than its author has
 reviewed it.
 
+## Install
+
+- **Rust** — the verifier, and the prover and set-log tools:
+
+  ```sh
+  cargo add solana-thin            # the verifier
+  cargo add solana-thin-prover     # a node that fetches blocks and serves proofs
+  cargo add solana-thin-setlog     # a signed log of validator-set hashes
+  ```
+
+- **JavaScript / TypeScript** — the WebAssembly verifier: `npm install solana-thin`.
+- **Swift** (iOS and macOS) — add this repository as a package:
+
+  ```swift
+  .package(url: "https://github.com/dannycake/solana-thin.git", from: "0.1.0")
+  ```
+
+- **Kotlin / Android** — built from source; see [docs/BINDINGS.md](docs/BINDINGS.md).
+
 ## What changed, and what this adds
 
 Before Alpenglow, validators voted with ordinary transactions. Checking that a
@@ -358,7 +377,7 @@ its own, `cargo test --features testkit` runs everything else, and a plain
   about 30 ms and 170 ms.
 
 What is not tested: a block whose leader switched parent (no public cluster
-produces one), and a run on an Android phone.
+produces one), and a run on physical Android hardware (an emulator ran).
 
 ## Using it
 
@@ -508,11 +527,13 @@ software around that.
    afternoon, an epoch boundary crossed live with both sets, and a way to
    keep proofs for longer than validators keep blocks, which today means
    asking while the block is hours old.
-3. **Bindings that ship.** The binding crate for Kotlin and Swift and the
-   WebAssembly module exist and are checked in CI
-   ([docs/BINDINGS.md](docs/BINDINGS.md)). Still to do: a run on a physical
-   phone, the Swift side compiled and tested in CI, and packages an app can
-   depend on (an Android archive, a Swift package, an npm module).
+3. **Bindings that ship.** The WebAssembly module is on npm as `solana-thin`
+   and the Swift binding is a Swift package; these, the Kotlin/Android binding
+   and the iPhone all verify a mainnet proof on their platforms
+   ([docs/BINDINGS.md](docs/BINDINGS.md)), Android on an emulator. Still to do:
+   compile and test the Swift side in CI rather than by hand on a Mac, and a
+   run on physical Android hardware. The Android binding is built from source,
+   not published to Maven.
 4. **Review by someone who works on a validator**, and the open items in
    [docs/NOTES.md](docs/NOTES.md).
 

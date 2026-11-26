@@ -7,10 +7,13 @@ JavaScript program, what that costs, and what has and has not been run.
 |---|---|
 | `crates/solana-thin-ffi` | The binding for Kotlin and Swift, generated with [UniFFI](https://mozilla.github.io/uniffi-rs/) 0.32. Builds as a shared library (Android, JVM) and a static one (iOS). |
 | `crates/uniffi-bindgen` | UniFFI's generator at the same release, and `describe-interface`, which lists what a built library exports. |
-| `crates/solana-thin-wasm` | The verifier as a WebAssembly module with no imports, and `solana-thin.mjs`, a class around it. A check and a starting point, not a package. |
+| `crates/solana-thin-wasm` | The verifier as a WebAssembly module with no imports, and `solana-thin.mjs`, a class around it. Published to npm as `solana-thin`. |
 
-None of the three is published anywhere. There is no Maven artifact, no Swift
-package and no npm package: you build the library and generate the sources.
+The WebAssembly module is published to npm as
+[`solana-thin`](https://www.npmjs.com/package/solana-thin), and the Swift
+binding as a Swift package (this repository, resolved by a version tag; see
+"iOS and the simulator" below). The Kotlin/Android binding is not published to
+a registry: build the library and generate the sources as below.
 
 ## The interface
 
