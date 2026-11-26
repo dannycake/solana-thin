@@ -600,11 +600,13 @@ the same as none existing.
 
 ## Next steps, in order
 
-1. **Find signers for the set log**, and publish one. The tool is built
-   (`docs/SETS.md`), and checks each source's members against the
-   admission debits of the block that admitted them; a log signed by one
-   party is one source. What the check cannot see: stake, and the keys of
-   accounts a rank map leaves out as they were at that block.
+1. **Find independent signers for the set log, and publish it.** The tool is
+   built (`docs/SETS.md`) and checks each set's members against the admission
+   debits of the block that admitted them, so that membership check is done.
+   What is left is not code: several signers independent of one another, each
+   reading the set themselves every epoch, and a published place for the file.
+   The one code path not yet run on real data is the shared-key rank map,
+   which no mainnet epoch seen so far has needed.
 2. **Run the prover for longer than an afternoon.** It is built
    (`docs/PROVER.md`) and was measured on 20 fresh mainnet blocks. Still to
    see live: an epoch boundary with both sets, slow certificates, old

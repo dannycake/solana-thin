@@ -9,6 +9,11 @@ repository.workspace = true
 keywords = ["solana", "light-client", "alpenglow", "ed25519", "transparency-log"]
 categories = ["cryptography::cryptocurrencies"]
 
+# Build the documentation on docs.rs with every feature, so the cli- and
+# rpc-gated items render alongside the rest.
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 # The `setlog` binary: reads sets from RPC nodes and from snapshot extracts,

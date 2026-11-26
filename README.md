@@ -491,13 +491,14 @@ software around that.
 
 1. **Signers for the set log.** The tool exists: it reads the exact set
    from snapshots served by several nodes and from the rank-map RPC, refuses
-   when they disagree, and writes a signed, hash-chained record per epoch
-   that a client checks before pinning ([docs/SETS.md](docs/SETS.md)). What
-   is missing is mostly not software. A log is worth what its signers are:
-   it needs several, independent of each other, who each read the set
-   themselves every epoch, and a published place for the file. One check is
-   still to build: membership against the admission debits in the epoch's
-   first block.
+   when they disagree, checks each set's members against the admission debits
+   in the epoch's first block, and writes a signed, hash-chained record per
+   epoch that a client checks before pinning ([docs/SETS.md](docs/SETS.md)).
+   What is missing is mostly not software. A log is worth what its signers
+   are: it needs several, independent of each other, who each read the set
+   themselves every epoch, and a published place for the file. The one code
+   path not yet exercised on real data is the shared-key rank map, which no
+   mainnet epoch seen so far has needed.
 2. **A prover people run.** The node exists
    ([docs/PROVER.md](docs/PROVER.md)): it finds a block's certificate, fetches
    the block from validators by its certified id, and serves

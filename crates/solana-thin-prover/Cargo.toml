@@ -9,6 +9,10 @@ repository.workspace = true
 keywords = ["solana", "light-client", "alpenglow", "prover", "repair"]
 categories = ["cryptography::cryptocurrencies"]
 
+# Build the documentation on docs.rs with every feature.
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 solana-thin = { path = "../solana-thin", version = "0.1.0" }
 # For set files and logs, and for its JSON-RPC client.

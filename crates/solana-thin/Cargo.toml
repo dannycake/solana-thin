@@ -13,6 +13,11 @@ categories = ["cryptography::cryptocurrencies"]
 # from a published package, so they are not in it.
 exclude = ["tests/conformance_ledger.rs", "tests/nightly_script.rs"]
 
+# Build the documentation on docs.rs with every feature, so the testkit items
+# render alongside the rest.
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 # Deterministic block and validator builders used by the test suite and examples.
