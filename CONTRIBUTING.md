@@ -26,7 +26,7 @@ which needs a current stable compiler. If you change what the bindings
 export, or anything they are built from, also run:
 
 ```sh
-scripts/bindings.sh    # the exported interface and the Kotlin smoke test (JDK, kotlinc)
+scripts/bindings.sh    # the interface, the committed Swift, and the Kotlin smoke test (JDK, kotlinc)
 scripts/wasm.sh        # a mainnet proof in the WebAssembly module (node, clang)
 ```
 

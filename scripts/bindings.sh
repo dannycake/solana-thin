@@ -9,7 +9,7 @@
 #      through the library. Needs a JDK and kotlinc.
 #
 # scripts/bindings.sh [--update] [--require-jvm]
-#   --update        rewrite interface.txt from the library instead of comparing
+#   --update        rewrite interface.txt and the committed Swift from the library
 #   --require-jvm   fail, do not skip, when step 3 cannot run (CI passes this)
 #
 # Environment:
@@ -37,7 +37,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 ffi=crates/solana-thin-ffi
 profile=${PROFILE:-dev}
-target=${CARGO_TARGET_DIR:-$root/target}
+# Honour a cargo config that redirects the target directory, not just the env var.
+target=${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}
 # cargo names the dev profile's directory "debug".
 built=$target/$([ "$profile" = dev ] && echo debug || echo "$profile")
 out=$target/bindings
@@ -75,6 +77,22 @@ for generated in "$kotlin_source" "$out/swift/solana_thin_ffi.swift" \
   [ -s "$generated" ] || { echo "not generated: $generated" >&2; exit 1; }
   echo "$generated"
 done
+
+echo "== the Swift package's committed source"
+# The Swift package ships the generated Swift (SwiftPM cannot run the
+# generator). UniFFI's Swift output is the same on any target, so the file the
+# Linux library generates must equal the committed one.
+swift_committed=$root/Sources/SolanaThin/solana_thin_ffi.swift
+if [ "$update" = 1 ]; then
+  cp "$out/swift/solana_thin_ffi.swift" "$swift_committed"
+  echo "wrote $swift_committed"
+elif ! diff -u "$swift_committed" "$out/swift/solana_thin_ffi.swift"; then
+  echo "$swift_committed is not what the library generates." >&2
+  echo "Regenerate it with scripts/bindings.sh --update." >&2
+  exit 1
+else
+  echo "as in $swift_committed"
+fi
 
 echo "== Kotlin smoke test"
 kotlinc=${KOTLINC:-kotlinc}

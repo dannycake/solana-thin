@@ -14,7 +14,9 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
-target=${CARGO_TARGET_DIR:-$root/target}
+# Honour a cargo config that redirects the target directory, not just the env var.
+target=${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}
 
 echo "== solana-thin for wasm32-unknown-unknown"
 cargo build --locked -p solana-thin --target wasm32-unknown-unknown
