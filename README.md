@@ -115,8 +115,9 @@ handovers; Solana has no such commitment that a small proof can open.
   ([docs/DESIGN.md](docs/DESIGN.md#validator-sets)). None is a proof: pin a
   hash that independent sources agree on.
 - *A record of who read it.* `setlog` reads the set from snapshots served by
-  several nodes and from the rank-map RPC, refuses if any two differ, and
-  writes a signed, hash-chained record per epoch. A client checks the log
+  several nodes and from the rank-map RPC, refuses if any two differ or if
+  any names members other than the accounts the cluster charged to admit,
+  and writes a signed, hash-chained record per epoch. A client checks the log
   against signer keys it ships with before it pins anything
   ([docs/SETS.md](docs/SETS.md)). That moves the trust to named signers; it
   does not remove it.
@@ -322,7 +323,8 @@ its own, `cargo test --features testkit` runs everything else, and a plain
 - **Validator-set logs** (`crates/solana-thin-setlog/tests`). Records and
   logs round-trip; every refusal has a test (a broken link, too few
   signatures, two sets for one epoch, an epoch that goes backward, a change
-  of cluster, sources that disagree); and changing any byte of a log file,
+  of cluster, sources that disagree, members that are not the accounts the
+  admitting block debited); and changing any byte of a log file,
   each of several ways, leaves a file that does not verify. The `setlog`
   binary is run end to end, against local stand-ins for RPC nodes.
   By hand on 2026-11-25, with the tools as committed: on mainnet, snapshots

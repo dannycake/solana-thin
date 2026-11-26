@@ -503,6 +503,32 @@ after it), a skipped slot among the ones asked for, peers going quiet, a
 block more than an hour old, and anything on testnet or devnet. The tests
 cover the first four against stand-in validators.
 
+## The admission check (2026-11-26)
+
+Read in Agave 4.4.1 first. `process_new_epoch` filters the vote accounts
+for admission and cuts them to 2,000 (`clone_and_filter_for_vat`), stores
+the result as the new epoch-stakes map (`update_epoch_stakes`), and charges
+every account of that map the ticket (`maybe_burn_vat_from_staked_accounts`).
+The rank map is built later from the same map and drops accounts that
+share a BLS key or node identity (`BLSPubkeyToRankMap::new`). So the
+debited accounts equal a snapshot's map, and a rank map is that less the
+shared ones.
+
+- Mainnet: the first block of epoch 1096 (slot 473,472,000) debited 662
+  accounts, the same 662 as epoch 1097's map in six extracts; the first
+  block of 1097 (473,904,000) debited 659, the same as 1098's map. Against
+  the maps of the other epochs in those extracts the debits differ by 2 to
+  7 accounts each.
+- `setlog agree` with the check gave `f546d44b…` (662) for 1097 and
+  `a3685e2e…` (659) for 1098. One extract with its maps for 1097 and 1098
+  swapped was refused, naming the four accounts not debited and the one
+  debited and missing.
+- `setlog from-rank-map` with the check: testnet 1098 and 1099 (481 ranked,
+  481 debited) and devnet 1219 (21 and 21).
+- No map of mainnet epochs 1093 to 1098 has two accounts sharing a key or
+  an identity, and testnet and devnet rank every account they debit. The
+  path for shared keys has run only in tests.
+
 ## Things I am least sure of
 
 1. **Other places where the verifier reads a block differently from the rule
@@ -577,10 +603,10 @@ the same as none existing.
 ## Next steps, in order
 
 1. **Find signers for the set log**, and publish one. The tool is built
-   (`docs/SETS.md`); a log signed by one party is one source. Then add the
-   cross-check of membership against the admission debits, which the tool
-   does not do: it takes the snapshot's and the rank map's word that the
-   map is already filtered.
+   (`docs/SETS.md`), and checks each source's members against the
+   admission debits of the block that admitted them; a log signed by one
+   party is one source. What the check cannot see: stake, and the keys of
+   accounts a rank map leaves out as they were at that block.
 2. **Run the prover for longer than an afternoon.** It is built
    (`docs/PROVER.md`) and was measured on 20 fresh mainnet blocks. Still to
    see live: an epoch boundary with both sets, slow certificates, old

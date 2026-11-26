@@ -19,7 +19,7 @@ client runs; its `setlog` binary and `snapshot-stakes` in
 | `epoch` | The epoch whose certificates the set verifies |
 | `set_hash` | `ValidatorSet::hash` of that set |
 | `validators` | How many validators it ranks |
-| `sources` | Where the set was read: a kind, a label, the slot it reflects |
+| `sources` | Where the set was read: a kind, a label, the slot it reflects. One of kind `admission` says the set's members were checked, and against which block ([below](#the-admission-check)) |
 | `prev` | SHA-256 of the previous record's bytes; zeros in the first |
 
 The bytes that are hashed and signed:
@@ -86,16 +86,18 @@ extracts, and to combine sources of both kinds:
 
 ```sh
 setlog agree --epoch 1097 --quorum 3 extracts/*.json \
+    --admission-url https://api.mainnet-beta.solana.com \
     --set set-1097.json --record record-1097.json --log mainnet.jsonl
 ```
 
 Set files written by `from-rank-map` or by an earlier `agree` are inputs
 too, and count for the sources they name. Both commands print the hash each
 source gives. They write the set file and an unsigned record only if *every*
-source gives the same set and at least `--quorum` distinct sources did. One
-source that differs stops it, however many agree: sources that are each
-exact cannot differ, so a difference means something is wrong and is for a
-person to look at. With `--log`, the record links to the end of that log.
+source gives the same set, at least `--quorum` distinct sources did, and the
+members pass the [admission check](#the-admission-check). One source that
+differs stops it, however many agree: sources that are each exact cannot
+differ, so a difference means something is wrong and is for a person to
+look at. With `--log`, the record links to the end of that log.
 
 **3. Sign.** The key is a 32-byte seed, read as hex from the environment
 variable `SETLOG_SIGNING_KEY` and from nowhere else. `setlog keygen` prints
@@ -124,6 +126,69 @@ trusted for where it came from.
 
 The set for epoch `E + 1` is fixed at the first block of epoch `E`, so there
 is a full epoch to do this in before clients need the record.
+
+## The admission check
+
+The set for epoch `E` is drawn from the vote accounts admitted at the first
+block of epoch `E − 1` (SIMD-0357). That block charges each admitted account
+the admission ticket and lists the charge among its rewards as a `VATDebit`.
+In Agave the accounts charged are exactly the epoch-stakes map kept for `E`:
+the map is filtered for admission and cut to 2,000 accounts first, and then
+every account in it is charged. The rank map is built from that map later
+and leaves out every account that shares a BLS key or node identity with
+another, so those accounts are charged and not ranked.
+
+Before writing anything, `agree` and `from-rank-map` read that block's
+debits from `--admission-url` (for `from-rank-map`, the first `--url` if none
+is given) and compare them with each source:
+
+- A snapshot extract's map for the epoch must list exactly the accounts
+  debited.
+- A rank map must rank only accounts that were debited, and each debited
+  account it leaves out must share a BLS key or node identity with another
+  debited account and with none it ranks. The rank map does not give the
+  keys of the accounts it leaves out, so those are read from their vote
+  accounts as they are now.
+- A set file names no accounts, only keys. It passes if it carries a check
+  against the same block, or if it is the same set as an input that names
+  accounts and passed. Alone and unchecked, it is refused.
+
+Any difference stops the command and names the accounts. So does a block
+with no debits (admission not in force, or a node that keeps no rewards)
+and a block that cannot be read: no answer is not a pass.
+
+A record made with the check carries one more source: kind `admission`,
+label `vat-debits`, and the slot of the block read. The label is fixed so
+that no part of the URL, which may hold an API key, is written down. It does
+not count toward `--quorum`, because it read no set. `setlog show` and
+`setlog verify` say, for each set, whether its members were checked and
+against which block.
+
+`--no-admission-check` skips the check. The record then has no admission
+source, and one an input carried is dropped, since this run did not check.
+
+**What it shows.** That every source's members are the accounts the cluster
+charged to enter the set: the snapshot or the node applied admission as the
+cluster did, and an extract was read for the right epoch. A snapshot holds
+the maps of five epochs, and neighboring epochs differ by only a few
+accounts, so a map read for the wrong one would otherwise pass unnoticed.
+The debits are a different record from the map: the node writes them to its
+ledger as the bank charges the accounts.
+
+**What it does not show.**
+
+- **Stake, keys and order.** Only membership is compared. A source with the
+  right accounts and a wrong stake passes this check.
+- **That the debits are true.** The list of rewards is a node's word, like a
+  rank map. Nothing here checks it against the bank hash. Reading it from a
+  node that is not one of the sources makes the check more independent.
+- **That the cluster followed SIMD-0357.** The map and the debits come from
+  the same computation in the same bank. The check shows that a source
+  reports what the cluster did, not that the cluster did it right.
+- **Which accounts a rank map should leave out, as of the block.** Their
+  keys are read as they are now. A key changed since can make the check
+  refuse a right rank map, or pass one that leaves out accounts that came
+  to share a key later. An extract has no such gap: it lists every account.
 
 ## Checking a log
 
@@ -173,9 +238,10 @@ no evidence, and a threshold of such signers is one source. That is why
 `sign` asks for the signer's own set file, and why it cannot do more than
 ask.
 
-The sources in a record are the signers' account of where they looked. They
-cannot be checked afterward: a snapshot is gone in hours, and no node will
-serve the same one again. They are there so that a reader can judge how
+The sources in a record are the signers' account of where they looked, and
+of the block they checked the members against. They cannot be checked
+afterward: a snapshot is gone in hours, and no node will serve the same one
+again. They are there so that a reader can judge how
 independent the reading was, and so that a wrong record can be traced.
 
 Signers are accountable only through the log. Two records for one epoch with

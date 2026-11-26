@@ -191,8 +191,13 @@ that hash, which nothing specifies today.
 The first two are read by tools in this repository (`snapshot-stakes` and
 `setlog from-rank-map`). `setlog` refuses on any difference between sources
 and records what agreed in a signed, hash-chained log that a client verifies
-before pinning. [SETS.md](SETS.md) has the format, the procedure, and what
-agreement between sources does and does not show.
+before pinning. It also compares each source's members with the `VATDebit`
+rewards of the block that admitted them: Agave charges exactly the accounts
+of the epoch-stakes map, after the cut to 2,000 and before the ranking step
+drops shared keys, so the debits must equal a snapshot's map and exceed a
+rank map by only the accounts that share a key. [SETS.md](SETS.md) has the
+format, the procedure, and what agreement between sources and the
+admission check do and do not show.
 
 **Why the hash must be pinned.** BLS aggregation is safe only if every key in
 the set has proven possession of its secret. The vote program checks that at
