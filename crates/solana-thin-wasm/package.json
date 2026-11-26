@@ -1,0 +1,47 @@
+{
+  "name": "solana-thin",
+  "version": "0.1.0",
+  "description": "The solana-thin verifier as a bare WebAssembly module with a small, dependency-free JavaScript wrapper: check that a transaction is in a finalized Solana block, from a small proof.",
+  "type": "module",
+  "main": "./solana-thin.mjs",
+  "module": "./solana-thin.mjs",
+  "types": "./solana-thin.d.ts",
+  "exports": {
+    ".": {
+      "types": "./solana-thin.d.ts",
+      "default": "./solana-thin.mjs"
+    },
+    "./solana_thin_wasm.wasm": "./solana_thin_wasm.wasm"
+  },
+  "files": [
+    "solana-thin.mjs",
+    "solana-thin.d.ts",
+    "solana_thin_wasm.wasm",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dannycake/solana-thin.git",
+    "directory": "crates/solana-thin-wasm"
+  },
+  "homepage": "https://github.com/dannycake/solana-thin#readme",
+  "bugs": {
+    "url": "https://github.com/dannycake/solana-thin/issues"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "solana",
+    "light-client",
+    "alpenglow",
+    "bls",
+    "merkle",
+    "wasm",
+    "webassembly",
+    "verifier"
+  ]
+}

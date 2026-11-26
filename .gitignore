@@ -3,3 +3,8 @@ tools/agave
 tools/agave-fixtures/target/
 *.swp
 .DS_Store
+
+# npm package build artifacts (assembled by scripts/npm-pack.sh, not committed)
+crates/solana-thin-wasm/solana_thin_wasm.wasm
+crates/solana-thin-wasm/LICENSE
+crates/solana-thin-wasm/*.tgz
