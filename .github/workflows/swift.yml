@@ -12,18 +12,19 @@ on:
 jobs:
   swift-test:
     name: swift test (macOS)
-    runs-on: macos-14
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
       - name: Build the macOS library and XCFramework
         run: |
           set -euo pipefail
-          rustup target add aarch64-apple-darwin
-          cargo build --locked --release -p solana-thin-ffi -p uniffi-bindgen --target aarch64-apple-darwin
+          host=$(rustc -vV | awk '/^host:/{print $2}')   # x86_64- or aarch64-apple-darwin
+          rustup target add "$host"
+          cargo build --locked --release -p solana-thin-ffi -p uniffi-bindgen --target "$host"
           target=$(cargo metadata --no-deps --format-version 1 \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-          bin=$target/aarch64-apple-darwin/release
+          bin=$target/$host/release
           "$bin/uniffi-bindgen" generate --no-format --language swift --out-dir gen "$bin/libsolana_thin_ffi.a"
           # The committed Swift must be what the library generates (same check as the Linux job).
           diff gen/solana_thin_ffi.swift Sources/SolanaThin/solana_thin_ffi.swift
