@@ -1,0 +1,45 @@
+name: Swift
+
+# The Swift package ships committed, generated sources and a binary XCFramework,
+# which the Linux CI cannot compile. This job builds the macOS library from the
+# current tree and runs the package's tests against it on a Mac. It does not
+# gate pushes: it runs nightly and on demand.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * *"
+
+jobs:
+  swift-test:
+    name: swift test (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the macOS library and XCFramework
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin
+          cargo build --locked --release -p solana-thin-ffi -p uniffi-bindgen --target aarch64-apple-darwin
+          target=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+          bin=$target/aarch64-apple-darwin/release
+          "$bin/uniffi-bindgen" generate --no-format --language swift --out-dir gen "$bin/libsolana_thin_ffi.a"
+          # The committed Swift must be what the library generates (same check as the Linux job).
+          diff gen/solana_thin_ffi.swift Sources/SolanaThin/solana_thin_ffi.swift
+          mkdir -p headers/solana_thin_ffiFFI
+          cp gen/solana_thin_ffiFFI.h headers/solana_thin_ffiFFI/
+          cp gen/solana_thin_ffiFFI.modulemap headers/solana_thin_ffiFFI/module.modulemap
+          xcodebuild -create-xcframework \
+            -library "$bin/libsolana_thin_ffi.a" -headers headers \
+            -output solana_thin_ffiFFI.xcframework
+
+      - name: Run the package tests against it
+        run: |
+          set -euo pipefail
+          mkdir -p ci-swift
+          cp .github/swift-ci/Package.swift ci-swift/Package.swift
+          cp -R Sources ci-swift/Sources
+          cp -R Tests ci-swift/Tests
+          mv solana_thin_ffiFFI.xcframework ci-swift/
+          cd ci-swift && swift test
