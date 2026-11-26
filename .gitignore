@@ -8,3 +8,5 @@ tools/agave-fixtures/target/
 crates/solana-thin-wasm/solana_thin_wasm.wasm
 crates/solana-thin-wasm/LICENSE
 crates/solana-thin-wasm/*.tgz
+solana_thin_ffiFFI.xcframework/
+*.xcframework.zip
