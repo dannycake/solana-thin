@@ -56,9 +56,6 @@ pub enum Error {
     /// The cluster parameters describe an epoch schedule no cluster can have,
     /// so there is no telling which epoch a slot is in.
     InvalidClusterParams(&'static str),
-    /// A signer that is not in the trusted set came without a valid proof of
-    /// possession.
-    MissingProofOfPossession,
 
     // ---- certificate ----
     /// The signer bitmap is not a valid single-vector (base 2) encoding.
@@ -80,8 +77,6 @@ pub enum Error {
         /// Required share, in basis points.
         required_bps: u32,
     },
-    /// The certificate is for an epoch too far past the trusted set.
-    TooStale,
 
     // ---- block structure ----
     /// A Merkle path or multiproof does not have the shape the tree requires.
@@ -136,8 +131,8 @@ pub enum Error {
 /// | [`Unsupported`](Self::Unsupported) | The input is in a format this build does not read: a newer proof version, or a block holding a transaction encoding it cannot walk. A newer version of this library may read it. Not a sign of an attack. | `UnsupportedVersion`, `UnsupportedTransaction` |
 /// | [`LimitExceeded`](Self::LimitExceeded) | Something is larger than this client allows, or than the format can say. Nothing was checked. If the input is legitimate, raise [`Limits`](crate::Limits). | `LimitExceeded`, `TooLargeToEncode` |
 /// | [`InvalidValidatorSet`](Self::InvalidValidatorSet) | The validator set offered was refused: it is not the set the pinned hash names, or it breaks a rule every real set keeps. Nothing was pinned. Fetch the set from another source; if every source gives the same bytes, the hash is the wrong one. | `InvalidPublicKey`, `ZeroStake`, `EmptyValidatorSet`, `DuplicateValidator`, `UnsortedValidatorSet`, `ValidatorSetHashMismatch`, `StakeOverflow` |
-/// | [`EpochNotPinned`](Self::EpochNotPinned) | The client holds no validator set that can judge this certificate: none is pinned for its epoch, or its slot is in a warm-up epoch the schedule does not cover. The proof may well be good. Pin that epoch's set and check it again. | `UnknownEpoch`, `SlotBeforeSchedule`, `TooStale` |
-/// | [`CertificateRejected`](Self::CertificateRejected) | The certificate does not show that the pinned validators finalized the block: its signature does not verify for the signers it names, or they hold too little stake. The cluster, the set or the certificate is the wrong one. Treat the block as not final. | `MissingProofOfPossession`, `InvalidBitmap`, `RankOutOfRange`, `NoSigners`, `InvalidSignature`, `SignatureMismatch`, `InsufficientStake` |
+/// | [`EpochNotPinned`](Self::EpochNotPinned) | The client holds no validator set that can judge this certificate: none is pinned for its epoch, or its slot is in a warm-up epoch the schedule does not cover. The proof may well be good. Pin that epoch's set and check it again. | `UnknownEpoch`, `SlotBeforeSchedule` |
+/// | [`CertificateRejected`](Self::CertificateRejected) | The certificate does not show that the pinned validators finalized the block: its signature does not verify for the signers it names, or they hold too little stake. The cluster, the set or the certificate is the wrong one. Treat the block as not final. | `InvalidBitmap`, `RankOutOfRange`, `NoSigners`, `InvalidSignature`, `SignatureMismatch`, `InsufficientStake` |
 /// | [`ProofRejected`](Self::ProofRejected) | The proof does not tie a transaction to the certified block: its shreds do not hash to the block id, do not chain back to it, or do not hold a transaction where the proof says. From [`ThinClient::verify_transaction`](crate::ThinClient::verify_transaction) this comes after the certificate verified, so the block may be final; the transaction is not shown to be in it. | `InvalidMerkleProof`, `BlockIdMismatch`, `InvalidShred`, `MissingShred`, `DuplicateShred`, `NotComponentStart`, `InvalidComponent`, `TransactionNotFound`, `BrokenAncestry`, `InvalidParent` |
 /// | [`WrongTransaction`](Self::WrongTransaction) | The proof is sound, but for another transaction than the one asked for. (From the prover: the block does not hold that transaction.) Nothing is known about the one asked for. | `SignatureNotFound` |
 /// | [`UnprovableBlock`](Self::UnprovableBlock) | The block is final, but of a kind this version refuses to prove anything in, because part of it may never have run. No proof for that block will pass. Not a sign of an attack, and not a statement about the transaction. | `UpdateParentBlock`, `ZeroParentId` |
@@ -200,11 +195,8 @@ impl Error {
             | Error::UnsortedValidatorSet
             | Error::ValidatorSetHashMismatch
             | Error::StakeOverflow => ErrorKind::InvalidValidatorSet,
-            Error::UnknownEpoch(_) | Error::SlotBeforeSchedule | Error::TooStale => {
-                ErrorKind::EpochNotPinned
-            }
-            Error::MissingProofOfPossession
-            | Error::InvalidBitmap
+            Error::UnknownEpoch(_) | Error::SlotBeforeSchedule => ErrorKind::EpochNotPinned,
+            Error::InvalidBitmap
             | Error::RankOutOfRange
             | Error::NoSigners
             | Error::InvalidSignature
@@ -260,9 +252,6 @@ impl fmt::Display for Error {
             Error::InvalidClusterParams(what) => {
                 write!(f, "cluster parameters are not valid: {what}")
             }
-            Error::MissingProofOfPossession => {
-                write!(f, "unknown signer without a valid proof of possession")
-            }
             Error::InvalidBitmap => write!(f, "invalid signer bitmap"),
             Error::RankOutOfRange => write!(f, "signer rank is outside the validator set"),
             Error::NoSigners => write!(f, "certificate names no signers"),
@@ -278,7 +267,6 @@ impl fmt::Display for Error {
                 required_bps / 100,
                 required_bps % 100
             ),
-            Error::TooStale => write!(f, "certificate is too many epochs past the trusted set"),
             Error::InvalidMerkleProof => write!(f, "invalid Merkle proof"),
             Error::BlockIdMismatch => write!(f, "data does not belong to the certified block"),
             Error::InvalidShred(what) => write!(f, "invalid shred: {what}"),
@@ -334,7 +322,6 @@ mod tests {
             Error::UnknownEpoch(1),
             Error::SlotBeforeSchedule,
             Error::InvalidClusterParams("x"),
-            Error::MissingProofOfPossession,
             Error::InvalidBitmap,
             Error::RankOutOfRange,
             Error::NoSigners,
@@ -345,7 +332,6 @@ mod tests {
                 total: 2,
                 required_bps: 8_000,
             },
-            Error::TooStale,
             Error::InvalidMerkleProof,
             Error::BlockIdMismatch,
             Error::InvalidShred("x"),
@@ -417,7 +403,7 @@ mod tests {
         assert_eq!(all, kinds, "ALL lists every kind");
 
         let variants = sorted(declared("Error"));
-        assert_eq!(variants.len(), 39);
+        assert_eq!(variants.len(), 37);
         let listed = table.iter().flat_map(|(_, row)| row.iter().copied());
         assert_eq!(sorted(listed), variants, "each variant in one row");
 
