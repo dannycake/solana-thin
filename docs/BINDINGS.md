@@ -119,12 +119,11 @@ with 16 KiB pages need.
 
 ## iOS and the simulator
 
-*Steps 1 to 4 and the phone were run with this crate on 2026-11-25 on an
-Apple silicon Mac (macOS 27.0, Xcode 27.0 with Swift 6.4 and the iOS 27.0
-SDK, Rust 1.94.0), and the Swift calls below compiled and ran in those
-tests. Step 5, the simulator, was run that day with a prototype of this
-crate (the same verifier and UniFFI release behind a smaller interface) and
-not rerun.*
+*All five steps were run with this crate on an Apple silicon Mac (macOS 27.0,
+Xcode 27.0 with Swift 6.4 and the iOS 27.0 SDK): steps 1 to 4 and the phone
+on 2026-11-25, and step 5, the simulator, rerun with this crate on
+2026-11-26. The generated Swift compiled and the package's tests passed both
+on the macOS slice and on a booted iOS 27 simulator.*
 
 You need an Apple silicon Mac with Xcode (not only the Command Line Tools)
 and one iOS simulator runtime. `xcode-select -p` must print a path inside
@@ -370,9 +369,9 @@ you are done with; the module's memory is not garbage-collected.
 
 Measured on 2026-11-25. "Desktop" is a 12th-generation Intel Core desktop CPU
 running Linux, with Rust 1.99.1; "Mac" is the Apple silicon Mac described
-under iOS. The simulator's numbers come from the prototype. The validator
-set is mainnet's for epoch 1095, 666 validators in 37,300 bytes. Times are
-medians; the phone's are over its 331 transactions.
+under iOS. The validator set is mainnet's for epoch 1095, 666 validators in
+37,300 bytes. Times are medians; the phone's are over its 331 transactions.
+The iOS-simulator row was confirmed with this crate on 2026-11-26.
 
 | Where | Pin a set | Verify, set kept |
 |---|---|---|
@@ -414,13 +413,13 @@ the verifier. The generator follows stable (1.91 at the locked versions).
 
 | Where | What | State |
 |---|---|---|
-| Linux x86-64 | Every Rust test in the workspace. The binding through generated Kotlin on the JVM. The WebAssembly module under node. The verifier's test suite under WASI. | This revision, 2026-11-25. CI is set to repeat it on every push |
-| Android arm64 and x86-64 | The library builds and links with the NDK. | Built 2026-11-25. Never loaded on a device or an emulator |
-| macOS arm64 | The library, the XCFramework, the Swift package's tests. | This revision, 2026-11-25 |
-| iOS simulator, arm64 | The Swift package's tests. | The prototype, 2026-11-25. Not rerun |
-| iOS, an iPhone 17 Pro | The tests in a hosted test bundle: 331 of 331 mainnet proofs, one from epoch 1097, four refusals. | This revision, 2026-11-25. By hand, not in CI |
-| Android, a phone | Nothing. | Never run |
-| A browser | Nothing. node runs V8, as Chrome does. | Never run |
+| Linux x86-64 | Every Rust test in the workspace. The binding through generated Kotlin on the JVM. The WebAssembly module under node. The verifier's test suite under WASI. | This revision. CI repeats it on every push |
+| Android arm64 and x86-64 | The library builds and links with the NDK for both. The x86-64 binding, through generated Kotlin and JNA, verifies a mainnet proof in an instrumented test. | Both built; x86-64 run on an emulator (maps-36, Android 36), 2026-11-26. By hand, not in CI |
+| macOS arm64 | The library, the XCFramework, and the Swift package's tests, which verify a mainnet proof. | This revision, 2026-11-26 |
+| iOS simulator, arm64 | The Swift package's tests, with this crate, on a booted simulator. | This revision, 2026-11-26. By hand, not in CI |
+| iOS, an iPhone 17 Pro | The tests in a hosted test bundle: 331 of 331 mainnet proofs, one from epoch 1097, four refusals. | 2026-11-25. By hand, not in CI |
+| A browser | The WebAssembly module, verifying a mainnet proof. | Headless Chromium, 2026-11-26. By hand, not in CI |
+| Android, a phone | Nothing. The emulator above stands in for it. | Never run on physical hardware |
 
 ## Checking the bindings
 
@@ -446,5 +445,6 @@ scripts/wasi-test.sh   # the verifier's tests under WASI; a few minutes
    `--require-jvm` is given, as it is in CI. JNA is downloaded from Maven
    Central and checked against a pinned hash, or taken from `JNA_JAR`.
 
-Nothing checks the generated Swift beyond its being generated: there is no
-Swift compiler in these checks.
+These scripts do not compile the generated Swift. That is checked on a Mac,
+where `swift test` builds the package against the macOS slice and
+`xcodebuild test` runs it on an iOS simulator; see "iOS and the simulator".
