@@ -179,11 +179,12 @@ impl BlockData {
         })
     }
 
-    /// Signatures of every transaction in the block, in order.
+    /// Signatures of every transaction the block ran, in order. In a block
+    /// that switched parent, that is the ones at or after the switch.
     pub fn signatures(&self) -> Vec<[u8; 64]> {
         self.components
             .iter()
-            .filter(|c| block::is_entry_batch(&c.data))
+            .filter(|c| block::is_entry_batch(&c.data) && self.ran(c))
             .filter_map(|c| block::transactions(&c.data).ok())
             .flatten()
             .filter_map(|(_, tx)| tx.signature().copied())
@@ -192,11 +193,21 @@ impl BlockData {
 
     /// Finds a transaction by its first signature. Returns its component, its
     /// position, and the offset just past its last byte.
+    ///
+    /// The copy that ran comes first: a leader that switched parent will
+    /// usually put the abandoned transactions back in the suffix. One found
+    /// only in the abandoned prefix is still returned, and the verifier
+    /// refuses the proof built from it, which is the right answer for it.
     fn locate(&self, signature: &[u8; 64]) -> Result<(&Component, TxPosition, usize)> {
-        for component in &self.components {
-            if component.start == 0 || !block::is_entry_batch(&component.data) {
-                continue;
-            }
+        let batches = || {
+            self.components
+                .iter()
+                .filter(|c| c.start != 0 && block::is_entry_batch(&c.data))
+        };
+        for component in batches()
+            .filter(|c| self.ran(c))
+            .chain(batches().filter(|c| !self.ran(c)))
+        {
             for (position, tx) in block::transactions(&component.data)? {
                 if tx.signature() == Some(signature) {
                     return Ok((component, position, end_of(&component.data, position)?));
@@ -204,6 +215,12 @@ impl BlockData {
             }
         }
         Err(Error::SignatureNotFound)
+    }
+
+    /// Whether `component` ran: everything did, unless the block switched
+    /// parent, when only what is at or after the switch did.
+    fn ran(&self, component: &Component) -> bool {
+        self.switch.is_none_or(|switch| component.start >= switch)
     }
 
     /// Opens the shreds that show `signature` is in this block: the header
@@ -236,7 +253,7 @@ impl BlockData {
             if let Some(footer) = self.components.iter().find(|c| {
                 !block::is_entry_batch(&c.data)
                     && matches!(block::parse_marker(&c.data), Ok(Marker::Footer(_)))
-                    && self.switch.is_none_or(|switch| c.start >= switch)
+                    && self.ran(c)
             }) {
                 needed.insert(footer.start - 1);
                 needed.extend(footer.start..=footer.last_shred_for(footer.data.len()));

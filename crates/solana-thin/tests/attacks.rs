@@ -1476,6 +1476,42 @@ fn a_block_with_a_split_marker_proves_its_executed_suffix() {
     );
 }
 
+/// A leader that switches parent will usually put the abandoned transactions
+/// back in the suffix, so one signature can be in a switched block twice. The
+/// honest prover proves the copy that ran, and lists only what ran.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_transaction_repeated_after_the_switch_proves_where_it_ran() {
+    let w = world();
+    let repeated = legacy_transaction(42, &[b"rebroadcast"]);
+    let abandoned = legacy_transaction(43, &[b"abandoned"]);
+    let block = update_parent_block(
+        1004,
+        w.blocks[2].block(),
+        w.blocks[1].block(),
+        SHRED_VERSION,
+        &[vec![vec![repeated.clone(), abandoned]]],
+        &[vec![vec![repeated]]],
+        None,
+    );
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let proof = prover::prove(cert, &[&block], &signature_for(42), true).unwrap();
+    let verified = w.client.verify_transaction(&proof).unwrap();
+    assert!(verified.has_memo(b"rebroadcast"));
+    assert_eq!(block.signatures(), vec![signature_for(42)]);
+    // One only in the abandoned prefix is proven nowhere.
+    assert_eq!(
+        w.client.verify_transaction(
+            &prover::prove(proof.finality, &[&block], &signature_for(43), true).unwrap()
+        ),
+        Err(Error::AbandonedPrefix)
+    );
+}
+
 /// A valid opening of one block, attached to a valid certificate for another.
 #[test]
 fn shreds_of_one_block_do_not_open_another() {
