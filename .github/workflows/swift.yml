@@ -3,11 +3,11 @@ name: Swift
 # The Swift package ships committed, generated sources and a binary XCFramework,
 # which the Linux CI cannot compile. This job builds the macOS library from the
 # current tree and runs the package's tests against it on a Mac. It does not
-# gate pushes: it runs nightly and on demand.
+# gate pushes, and runs on demand only: macOS runners are not reliably
+# available on this account, so it is not scheduled. The committed Swift is
+# guarded on every push by the Linux job (scripts/bindings.sh).
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 9 * * *"
 
 jobs:
   swift-test:
