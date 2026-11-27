@@ -87,6 +87,8 @@ fn read_answer(stream: &mut TcpStream) -> Answer {
     let body = raw[split + 4..].to_vec();
     assert!(head.contains(&format!("Content-Length: {}", body.len())));
     assert!(head.contains("Connection: close"));
+    // A page on another origin, verifying in the browser, may read every answer.
+    assert!(head.contains("Access-Control-Allow-Origin: *"));
     Answer { status, head, body }
 }
 

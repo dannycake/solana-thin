@@ -18,13 +18,21 @@
 //! name of a [`solana_thin::ErrorKind`]. Numbers that may not fit a
 //! JavaScript number are decimal strings, and bytes are hex.
 
-use solana_thin::{ClusterParams, Error, ErrorKind, Finality, ThinClient, TxProof};
+use solana_thin::certificate::decode_bitmap;
+use solana_thin::transaction::MessageVersion;
+use solana_thin::{Aggregate, FinalityCert, ValidatorSet};
+use solana_thin::{
+    BlockRef, ClusterParams, Error, ErrorKind, Finality, ThinClient, Transaction, TxProof,
+};
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 /// A verifier, behind the handle [`st_verifier_new`] gives the host.
 pub struct Verifier {
     client: ThinClient,
+    /// Each pinned epoch's stake by rank, to say how much of it signed.
+    stakes: BTreeMap<u64, Vec<u64>>,
 }
 
 /// Why a call was refused: a kind for the host to branch on, the verifier's
@@ -188,6 +196,7 @@ pub extern "C" fn st_verifier_new(
         };
         let verifier = Box::new(Verifier {
             client: ThinClient::new(params),
+            stakes: BTreeMap::new(),
         });
         Ok(format!(
             r#""verifier":{}"#,
@@ -237,6 +246,11 @@ pub unsafe extern "C" fn st_pin(
         verifier
             .client
             .trust_validator_set_bytes(epoch, set, &hash)?;
+        // Pinned, so the bytes are a set that hashes to the pin.
+        let ranked = ValidatorSet::from_bytes(set)?;
+        verifier
+            .stakes
+            .insert(epoch, ranked.validators().iter().map(|v| v.stake).collect());
         Ok(String::new())
     };
     answer(pinned())
@@ -258,22 +272,25 @@ pub unsafe extern "C" fn st_verify(
     signature_length: usize,
 ) -> *mut u8 {
     // SAFETY: the caller's contract.
-    let (client, proof, signature) = unsafe {
+    let (verifier, proof, signature) = unsafe {
         (
-            &(*verifier).client,
+            &*verifier,
             bytes(proof, proof_length),
             bytes(signature, signature_length),
         )
     };
+    let client = &verifier.client;
+    let proof_bytes = proof;
     let verified = || {
+        let proof = TxProof::from_bytes(proof_bytes, client.limits())?;
         let verified = if signature.is_empty() {
-            client.verify_transaction_bytes(proof)?
+            client.verify_transaction_bytes(proof_bytes)?
         } else {
             let signature = sized::<64>("expected signature", signature)?;
-            let proof = TxProof::from_bytes(proof, client.limits())?;
             client.verify_signature(&proof, &signature)?
         };
         let certified = verified.finalized_by;
+        let epoch = client.params().epoch_of(certified.block.slot)?;
         // Every transaction the verifier parses has a signature. If that
         // ever stopped being so, an empty id must not be the answer.
         let id = verified
@@ -291,23 +308,163 @@ pub unsafe extern "C" fn st_verify(
             // `Finality` may grow; a new way keeps the verifier's name for it.
             other => format!("{other:?}").to_lowercase(),
         };
+        let footer = verified.footer.as_ref().map_or("null".to_owned(), |f| {
+            format!(
+                r#"{{"bankHash":{},"userAgent":{}}}"#,
+                quoted(&hex(&f.bank_hash)),
+                quoted(&hex(&f.user_agent)),
+            )
+        });
         Ok(format!(
             concat!(
                 r#""slot":{},"blockId":{},"epoch":{},"transactionId":{},"#,
-                r#""blockTimeNanos":{},"finality":{},"memos":[{}]"#,
+                r#""blockTimeNanos":{},"finality":{},"memos":[{}],"#,
+                r#""parent":{},"finalizedBy":{},"position":{{"entry":{},"transaction":{}}},"#,
+                r#""footer":{},"transaction":{},"anatomy":{}"#,
             ),
             decimal(verified.block.slot),
             quoted(&hex(&verified.block.id)),
-            decimal(client.params().epoch_of(certified.block.slot)?),
+            decimal(epoch),
             quoted(&hex(id)),
             verified
                 .block_time_nanos()
                 .map_or("null".to_owned(), decimal),
             quoted(&finality),
             memos.join(","),
+            block(&verified.parent),
+            block(&certified.block),
+            verified.position.entry,
+            verified.position.transaction,
+            footer,
+            transaction(&verified.transaction),
+            anatomy(
+                &proof,
+                proof_bytes.len(),
+                epoch,
+                verifier.stakes.get(&epoch),
+            )?,
         ))
     };
     answer(verified())
+}
+
+/// What the proof is made of, for a reader to see how it holds together: the
+/// certificate's signers and their stake, the parent links from the certified
+/// block down, and which shreds of the block it opens. Read from a proof that
+/// has just verified, so every part of it is checked.
+fn anatomy(
+    proof: &TxProof,
+    size: usize,
+    epoch: u64,
+    stakes: Option<&Vec<u64>>,
+) -> Result<String, Refusal> {
+    // The proof just verified under this epoch's set, so it is pinned.
+    let stakes = stakes.ok_or(Error::UnknownEpoch(epoch))?;
+    let total: u64 = stakes.iter().sum();
+    let aggregate = |vote: &str, aggregate: &Aggregate| -> Result<String, Refusal> {
+        let ranks = decode_bitmap(&aggregate.bitmap, stakes.len())?;
+        let signed: u64 = ranks.iter().map(|&rank| stakes[rank]).sum();
+        Ok(format!(
+            r#"{{"vote":"{vote}","signers":[{}],"stakeSigned":{},"stakeTotal":{}}}"#,
+            ranks
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            decimal(signed),
+            decimal(total),
+        ))
+    };
+    let aggregates = match &proof.finality {
+        FinalityCert::Fast { notar, .. } => vec![aggregate("notarize", notar)?],
+        FinalityCert::Slow {
+            finalize, notar, ..
+        } => vec![
+            aggregate("notarize", notar)?,
+            aggregate("finalize", finalize)?,
+        ],
+        // `FinalityCert` may grow; a kind this does not know shows no signers.
+        _ => Vec::new(),
+    };
+    let ancestry: Vec<String> = proof
+        .ancestry
+        .iter()
+        .map(|link| block(&link.parent))
+        .collect();
+    let opened: Vec<String> = proof
+        .block
+        .sets
+        .iter()
+        .map(|set| {
+            format!(
+                r#"{{"set":{},"first":{},"shreds":{}}}"#,
+                set.set,
+                set.first,
+                set.shreds.len()
+            )
+        })
+        .collect();
+    Ok(format!(
+        concat!(
+            r#"{{"proofBytes":{},"validators":{},"aggregates":[{}],"ancestry":[{}],"#,
+            r#""fecSets":{},"opened":[{}],"componentStart":{},"footerStart":{}}}"#,
+        ),
+        size,
+        stakes.len(),
+        aggregates.join(","),
+        ancestry.join(","),
+        proof.block.parent.fec_set_count,
+        opened.join(","),
+        proof.component_start,
+        proof
+            .footer_start
+            .map_or("null".to_owned(), |start| start.to_string()),
+    ))
+}
+
+/// A block as JSON: its slot and id.
+fn block(block: &BlockRef) -> String {
+    format!(
+        r#"{{"slot":{},"id":{}}}"#,
+        decimal(block.slot),
+        quoted(&hex(&block.id))
+    )
+}
+
+/// The parsed transaction as JSON, as the verifier read it from the block.
+fn transaction(tx: &Transaction) -> String {
+    let list = |items: Vec<String>| items.join(",");
+    let version = match tx.version {
+        MessageVersion::Legacy => "legacy".to_owned(),
+        MessageVersion::V0 => "v0".to_owned(),
+        MessageVersion::V1 => "v1".to_owned(),
+        // `MessageVersion` may grow, like `Finality`.
+        other => format!("{other:?}").to_lowercase(),
+    };
+    let instructions = tx
+        .instructions
+        .iter()
+        .map(|ix| {
+            format!(
+                r#"{{"programIdIndex":{},"accounts":[{}],"data":{}}}"#,
+                ix.program_id_index,
+                list(ix.accounts.iter().map(u8::to_string).collect()),
+                quoted(&hex(&ix.data)),
+            )
+        })
+        .collect();
+    format!(
+        concat!(
+            r#"{{"version":{},"signatures":[{}],"accountKeys":[{}],"#,
+            r#""recentBlockhash":{},"instructions":[{}],"message":{}}}"#,
+        ),
+        quoted(&version),
+        list(tx.signatures.iter().map(|s| quoted(&hex(s))).collect()),
+        list(tx.account_keys.iter().map(|k| quoted(&hex(k))).collect()),
+        quoted(&hex(&tx.recent_blockhash)),
+        list(instructions),
+        quoted(&hex(&tx.message)),
+    )
 }
 
 #[cfg(test)]
@@ -427,6 +584,73 @@ mod tests {
         let verified = verify(verifier, &v.proof, &[]);
         let time = verified["blockTimeNanos"].as_str().unwrap().to_owned();
         assert!(time.parse::<u64>().unwrap() > 1_793_500_000_000_000_000);
+        // The transaction as the verifier read it, checked field by field
+        // against the core crate's own parse of the same proof.
+        let tx = &verified["transaction"];
+        let core = {
+            let params = solana_thin::ClusterParams::mainnet(v.shred_version as u16);
+            let mut client = ThinClient::new(params);
+            let set = solana_thin::ValidatorSet::from_bytes(&v.set).unwrap();
+            client
+                .trust_validator_set(v.epoch, set, &v.set_hash.clone().try_into().unwrap())
+                .unwrap();
+            client.verify_transaction_bytes(&v.proof).unwrap()
+        };
+        let keys: Vec<String> = core
+            .transaction
+            .account_keys
+            .iter()
+            .map(hex::encode)
+            .collect();
+        assert_eq!(tx["accountKeys"], json!(keys));
+        assert_eq!(tx["signatures"], json!([hex::encode(&v.signature)]));
+        assert_eq!(tx["message"], hex::encode(&core.transaction.message));
+        assert_eq!(
+            tx["instructions"].as_array().unwrap().len(),
+            core.transaction.instructions.len()
+        );
+        let first = &core.transaction.instructions[0];
+        assert_eq!(
+            tx["instructions"][0],
+            json!({
+                "programIdIndex": first.program_id_index,
+                "accounts": first.accounts,
+                "data": hex::encode(&first.data),
+            })
+        );
+        let footer = core.footer.as_ref().unwrap();
+        // The anatomy, checked against the decoded proof and the set.
+        let anatomy = &verified["anatomy"];
+        let decoded = TxProof::from_bytes(&v.proof, &solana_thin::Limits::default()).unwrap();
+        let set = solana_thin::ValidatorSet::from_bytes(&v.set).unwrap();
+        let FinalityCert::Fast { notar, .. } = &decoded.finality else {
+            panic!("the vector's certificate is fast")
+        };
+        let ranks = decode_bitmap(&notar.bitmap, set.len()).unwrap();
+        let signed: u64 = ranks.iter().map(|&r| set.validators()[r].stake).sum();
+        assert_eq!(anatomy["aggregates"][0]["signers"], json!(ranks));
+        assert_eq!(anatomy["aggregates"][0]["stakeSigned"], signed.to_string());
+        assert_eq!(
+            anatomy["aggregates"][0]["stakeTotal"],
+            set.total_stake().to_string()
+        );
+        assert!(
+            signed as u128 * 10 >= set.total_stake() as u128 * 8,
+            "a fast certificate is 80%"
+        );
+        assert_eq!(anatomy["validators"], set.len());
+        assert_eq!(anatomy["ancestry"], json!([]));
+        assert_eq!(anatomy["fecSets"], decoded.block.parent.fec_set_count);
+        assert_eq!(anatomy["proofBytes"], v.proof.len());
+        let opened: usize = anatomy["opened"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|set| set["shreds"].as_u64().unwrap() as usize)
+            .sum();
+        let shreds: usize = decoded.block.sets.iter().map(|set| set.shreds.len()).sum();
+        assert_eq!(opened, shreds);
+        assert_eq!(anatomy["footerStart"], json!(decoded.footer_start));
         assert_eq!(
             verified,
             json!({
@@ -438,8 +662,28 @@ mod tests {
                 "blockTimeNanos": time,
                 "finality": "fast",
                 "memos": [],
+                "parent": {
+                    "slot": core.parent.slot.to_string(),
+                    "id": hex::encode(core.parent.id),
+                },
+                "finalizedBy": {
+                    "slot": core.finalized_by.block.slot.to_string(),
+                    "id": hex::encode(core.finalized_by.block.id),
+                },
+                "position": {
+                    "entry": core.position.entry,
+                    "transaction": core.position.transaction,
+                },
+                "footer": {
+                    "bankHash": hex::encode(footer.bank_hash),
+                    "userAgent": hex::encode(&footer.user_agent),
+                },
+                "transaction": tx,
+                "anatomy": anatomy,
             })
         );
+        assert_eq!(verified["parent"]["slot"], "473100910");
+        assert_eq!(tx["version"], "legacy");
         assert_eq!(verify(verifier, &v.proof, &v.signature), verified);
 
         let mut other = v.signature.clone();

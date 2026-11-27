@@ -26,6 +26,87 @@ export interface Verified {
   finality: string;
   /** The payloads of any Memo-program instructions in the transaction. */
   memos: Uint8Array[];
+  /** The block's parent, as the block commits to it. */
+  parent: BlockRef;
+  /** The block the finality certificate was for: this block or a descendant. */
+  finalizedBy: BlockRef;
+  /** Where the transaction sits in its entry batch. */
+  position: { entry: number; transaction: number };
+  /** The block's footer, when the proof opened it. */
+  footer: Footer | null;
+  /** The transaction, as the verifier read it out of the block. */
+  transaction: Transaction;
+  /** What the proof is made of, every part of it checked. */
+  anatomy: Anatomy;
+}
+
+/** How a verified proof holds together. */
+export interface Anatomy {
+  /** The proof's size in bytes. */
+  proofBytes: number;
+  /** How many validators the pinned set ranks. */
+  validators: number;
+  /** The certificate's aggregates: one notarize for fast finality, a
+   * notarize and a finalize for slow. */
+  aggregates: {
+    vote: "notarize" | "finalize";
+    /** Ranks, into the pinned set, of the validators whose votes it carries. */
+    signers: number[];
+    stakeSigned: bigint;
+    stakeTotal: bigint;
+  }[];
+  /** Parents from the certified block down to the transaction's block,
+   * newest first. Empty when the certificate is for the transaction's block. */
+  ancestry: BlockRef[];
+  /** FEC sets in the transaction's block (each holds 32 data shreds). */
+  fecSets: number;
+  /** The shreds the proof opens: `shreds` consecutive ones from position
+   * `first` of FEC set `set`. */
+  opened: { set: number; first: number; shreds: number }[];
+  /** Index of the first shred of the batch holding the transaction. */
+  componentStart: number;
+  /** Index of the first shred of the block's footer, when the proof opens it. */
+  footerStart: number | null;
+}
+
+/** A block: its slot and its 32-byte id. */
+export interface BlockRef {
+  slot: bigint;
+  id: Uint8Array;
+}
+
+/** What the leader wrote after a block's last entry. */
+export interface Footer {
+  /** Hash of the bank after the block executed, 32 bytes. */
+  bankHash: Uint8Array;
+  /** Free-form client identification written by the leader. */
+  userAgent: Uint8Array;
+}
+
+/** One instruction of a transaction. */
+export interface Instruction {
+  /** Index of the program in the transaction's account keys. */
+  programIdIndex: number;
+  /** Indexes of the accounts the instruction touches. Indexes past the
+   * listed keys name accounts loaded from address lookup tables. */
+  accounts: number[];
+  data: Uint8Array;
+}
+
+/** A transaction as it appears inside a block. */
+export interface Transaction {
+  /** "legacy", "v0" or "v1". */
+  version: string;
+  /** Ed25519 signatures, 64 bytes each. The first is the transaction id. */
+  signatures: Uint8Array[];
+  /** Account keys listed in the message, 32 bytes each. Keys loaded from
+   * address lookup tables are not here: resolving them needs account state. */
+  accountKeys: Uint8Array[];
+  /** The recent blockhash (or durable nonce) the transaction commits to. */
+  recentBlockhash: Uint8Array;
+  instructions: Instruction[];
+  /** The exact bytes the signatures cover. */
+  message: Uint8Array;
 }
 
 /** Checks proofs against the validator sets it has been told to trust. */

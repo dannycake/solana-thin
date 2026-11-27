@@ -62,7 +62,25 @@ assert.deepEqual(verified, {
   blockTimeNanos: verified.blockTimeNanos,
   finality: 'fast',
   memos: [],
+  parent: { slot: BigInt(vector.parent_slot), id: verified.parent.id },
+  finalizedBy: verified.finalizedBy,
+  position: verified.position,
+  footer: verified.footer,
+  transaction: verified.transaction,
+  anatomy: verified.anatomy,
 });
+const { anatomy } = verified;
+assert.equal(anatomy.proofBytes, proof.length);
+assert.equal(anatomy.aggregates.length, 1);
+assert.equal(anatomy.aggregates[0].stakeSigned * 10n >= anatomy.aggregates[0].stakeTotal * 8n, true);
+assert.deepEqual(anatomy.ancestry, []);
+const { transaction } = verified;
+assert.deepEqual(transaction.signatures, [signature]);
+assert.equal(transaction.version, 'legacy');
+assert.equal(transaction.accountKeys.every((key) => key.length === 32), true);
+assert.equal(transaction.instructions.length > 0, true);
+assert.equal(verified.parent.id.length, 32);
+assert.equal(verified.footer.bankHash.length, 32);
 assert.equal(typeof verified.blockTimeNanos, 'bigint');
 assert.deepEqual(verifier.verify(proof, signature), verified);
 console.log(`slot ${verified.slot}, epoch ${verified.epoch}, ${verified.finality} finality, ` +

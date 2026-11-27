@@ -46,6 +46,8 @@ reviewed it.
   ```
 
 - **JavaScript / TypeScript** — the WebAssembly verifier: `npm install solana-thin`.
+  [explorer/](explorer/README.md) is a static web explorer built on it: it
+  verifies proofs in the browser, and its host never learns what was looked up.
 - **Swift** (iOS and macOS) — add this repository as a package:
 
   ```swift
@@ -500,6 +502,8 @@ docs/LOCAL-VALIDATOR.md  the test against a running validator
 docs/BINDINGS.md         Android, iOS and WebAssembly: building, calling,
                          cost, and what was run where
 docs/NOTES.md            working notes: evidence, sources, decisions, next steps
+explorer/                a static, in-browser explorer that verifies proofs
+                         itself and tells its host nothing
 ```
 
 ## Roadmap

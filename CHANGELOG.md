@@ -5,6 +5,24 @@ All notable changes to this project are recorded here. The format follows
 follows [Semantic Versioning](https://semver.org/) with the pre-1.0 caveat in
 [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+### Added
+
+- **Explorer** (`explorer/`, `scripts/explorer.sh`): a static web page that
+  fetches a proof from a prover, verifies it in WebAssembly, and shows the
+  proven transaction. It has no server code and makes the same requests for
+  every visitor, so its host never learns what was looked up.
+- `solana-thin-wasm`: `verify` also returns the block's parent, the block the
+  certificate was for, the transaction's position, the footer's bank hash and
+  client, and the transaction itself (signatures, account keys, recent
+  blockhash, instructions, message bytes).
+  It also returns the proof's anatomy: the certificate's signers (by rank)
+  and their share of stake, the parent links, the block's FEC set count, and
+  which shreds the proof opens.
+- `prover serve` sends `Access-Control-Allow-Origin: *` with every answer, so
+  a page on any origin can read it.
+
 ## [0.1.0]
 
 First release. `solana-thin` checks, from a small proof and an untrusted

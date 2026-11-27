@@ -286,8 +286,15 @@ fn answer(shared: &Shared, mut stream: TcpStream) {
         Ok(target) => respond(shared, &target),
         Err(response) => response,
     };
+    // Everything served is public and nothing depends on who asks, so any
+    // page may read it: a browser that verifies proofs itself, on an origin
+    // of its own, needs this header to see the answer. No credentials are
+    // accepted, so none are allowed.
     let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        concat!(
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
+            "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        ),
         response.status,
         reason(response.status),
         response.content_type,

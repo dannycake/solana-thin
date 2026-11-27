@@ -7,6 +7,7 @@
 #      imports, in release mode.
 #   3. Verifies a mainnet proof in that module under node
 #      (crates/solana-thin-wasm/check.mjs).
+#   4. Reads the same proof as the explorer does (explorer/check.mjs).
 #
 # Needs the wasm32-unknown-unknown target (rustup target add), a clang that
 # can compile for wasm32 (blst is C), and node.
@@ -27,4 +28,8 @@ module=$target/wasm32-unknown-unknown/release/solana_thin_wasm.wasm
 
 echo "== a mainnet proof under node"
 node crates/solana-thin-wasm/check.mjs "$module" \
+  crates/solana-thin/tests/vectors/mainnet-block-473100911.json
+
+echo "== the explorer's decoding of the same proof"
+node explorer/check.mjs "$module" \
   crates/solana-thin/tests/vectors/mainnet-block-473100911.json

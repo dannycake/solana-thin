@@ -65,6 +65,9 @@ older one alone does not reach forward.
 | `GET /health` | `200` and a JSON object: cluster, shred version, pinned epochs, peers known and answering, requests sent, proofs built and refused, what the store holds. |
 
 A signature is base58, as explorers and the `solana` CLI print it.
+Every answer carries `Access-Control-Allow-Origin: *`, so a web page on any
+origin can fetch a proof and verify it in the browser (`explorer/`). Nothing
+served depends on who asks, and no credentials are accepted.
 
 One thread accepts connections, a fixed number answer them, and one owns the
 socket to the validators and builds proofs one at a time from a bounded

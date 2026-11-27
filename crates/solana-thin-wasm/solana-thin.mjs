@@ -22,6 +22,7 @@ export class VerifyError extends Error {
 }
 
 const unhex = (text) => Uint8Array.from(text.match(/../g) ?? [], (pair) => parseInt(pair, 16));
+const block = ({ slot, id }) => ({ slot: BigInt(slot), id: unhex(id) });
 
 /**
  * Instantiates the module. `source` is the bytes of the .wasm file or a
@@ -124,6 +125,34 @@ export async function load(source) {
         blockTimeNanos: found.blockTimeNanos === null ? null : BigInt(found.blockTimeNanos),
         finality: found.finality,
         memos: found.memos.map(unhex),
+        parent: block(found.parent),
+        finalizedBy: block(found.finalizedBy),
+        position: found.position,
+        footer: found.footer === null ? null : {
+          bankHash: unhex(found.footer.bankHash),
+          userAgent: unhex(found.footer.userAgent),
+        },
+        transaction: {
+          version: found.transaction.version,
+          signatures: found.transaction.signatures.map(unhex),
+          accountKeys: found.transaction.accountKeys.map(unhex),
+          recentBlockhash: unhex(found.transaction.recentBlockhash),
+          instructions: found.transaction.instructions.map((ix) => ({
+            programIdIndex: ix.programIdIndex,
+            accounts: ix.accounts,
+            data: unhex(ix.data),
+          })),
+          message: unhex(found.transaction.message),
+        },
+        anatomy: {
+          ...found.anatomy,
+          aggregates: found.anatomy.aggregates.map((aggregate) => ({
+            ...aggregate,
+            stakeSigned: BigInt(aggregate.stakeSigned),
+            stakeTotal: BigInt(aggregate.stakeTotal),
+          })),
+          ancestry: found.anatomy.ancestry.map(block),
+        },
       };
     }
 

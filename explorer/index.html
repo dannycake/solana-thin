@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  The page's own promise, enforced by the browser: code and styles come only
+  from this origin, nothing is framed or embedded, and forms post nowhere.
+  connect-src is the one opening: a prover the reader chooses. Build with
+  scripts/explorer.sh --connect <origin> to name provers exactly.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>solana-thin explorer</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="explorer.css">
+<script type="module" src="explorer.js"></script>
+</head>
+<body>
+<main>
+  <header class="page-head">
+    <h1>solana-thin explorer</h1>
+    <p>Verifies Solana transactions in your browser from a finality proof.</p>
+  </header>
+
+  <section class="step active" id="step-1" aria-labelledby="provider-title">
+    <div class="step-head"><span class="number">1</span><h2 id="provider-title">Provider</h2>
+      <span class="summary" id="provider-summary"></span>
+      <button class="change" id="change-provider" aria-label="Change provider" hidden>Change</button>
+    </div>
+    <form id="settings" class="body" autocomplete="off">
+      <fieldset><legend>Proof source</legend>
+        <label class="option"><input type="radio" name="source" value="own" checked>
+          <span><strong>Your own prover</strong><small>Validators see only the block. Without a slot, your RPC node sees the signature.</small></span></label>
+        <div class="config" id="own-config"><label for="own-url">Prover URL</label>
+          <input id="own-url" type="url" value="http://127.0.0.1:8080" spellcheck="false">
+          <code class="command">prover serve --rpc &lt;rpc-url&gt; --set &lt;set file&gt; --listen 127.0.0.1:8080</code></div>
+        <label class="option"><input type="radio" name="source" value="other">
+          <span><strong>Another prover</strong><small>Its operator sees the signature.</small></span></label>
+        <div class="config" id="other-config" hidden><label for="other-url">Prover URL</label>
+          <input id="other-url" type="url" spellcheck="false" placeholder="https://prover.example.org" disabled></div>
+        <label class="option"><input type="radio" name="source" value="file">
+          <span><strong>A proof file</strong><small>Nobody receives the signature.</small></span></label>
+      </fieldset>
+      <button id="continue" disabled>Continue</button>
+    </form>
+  </section>
+  <section class="step" id="step-2" aria-labelledby="input-title">
+    <div class="step-head"><span class="number">2</span><h2 id="input-title">Signature</h2>
+      <span class="summary" id="input-summary"></span>
+      <button class="change" id="change-input" hidden>Change</button>
+    </div>
+    <div id="input-body" class="body" hidden>
+      <form id="lookup" autocomplete="off">
+        <label for="signature">Transaction signature</label><input id="signature" required spellcheck="false">
+        <label for="slot">Slot (optional)</label><input id="slot" inputmode="numeric" aria-describedby="slot-help">
+        <small id="slot-help">With a slot, the prover asks no RPC node.</small>
+        <button id="verify">Verify</button>
+      </form>
+      <div id="file-input" hidden>
+        <label for="proof-file">Choose or drop a proof file</label>
+        <input id="proof-file" type="file" accept=".proof,.bin,application/octet-stream">
+        <button id="example" type="button" class="quiet">Load mainnet example</button>
+      </div>
+    </div>
+  </section>
+  <section class="step" id="step-3" aria-labelledby="result-title">
+    <div class="step-head"><span class="number">3</span><h2 id="result-title">Result</h2></div>
+    <div class="body">
+      <section id="need-hash" hidden>
+        <h3>Pin a validator set for epoch <span data-epoch></span></h3>
+        <form id="pin-form"><label for="pin-hash">Trusted set hash (64 hex characters)</label>
+          <input id="pin-hash" spellcheck="false" autocomplete="off"><button>Pin and verify</button></form>
+        <div id="prover-claim" hidden><p>The prover reports <code data-claim></code>. Accepting it lets the prover choose which validators you trust.</p>
+          <button id="take-claim" class="quiet">Trust the prover for this epoch</button></div>
+      </section>
+      <article id="result" hidden tabindex="-1" aria-labelledby="verdict-title"></article>
+    </div>
+  </section>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <footer>
+    <details><summary id="network-summary">Network requests</summary><ol id="ledger"></ol></details>
+    <details><summary>Pinned set hashes</summary><ul id="pins"></ul></details>
+  </footer>
+</main>
+</body>
+</html>

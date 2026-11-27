@@ -364,6 +364,14 @@ Slots, epochs and times are `BigInt`: a block time in nanoseconds does not
 fit a JavaScript number. Bytes are `Uint8Array`. Call `free()` on a verifier
 you are done with; the module's memory is not garbage-collected.
 
+The JavaScript answer carries more than the Kotlin and Swift one: also the
+block's `parent`, the block the certificate was for (`finalizedBy`), the
+transaction's `position` in its batch, the `footer`'s bank hash and the
+leader's client string, and the `transaction` as the verifier read it
+(signatures, account keys, recent blockhash, instructions, message bytes).
+`solana-thin.d.ts` types them all. [explorer/](../explorer/README.md) is a
+web page built on this.
+
 `scripts/wasm.sh` builds all of this and verifies a mainnet proof under node.
 `scripts/wasi-test.sh` runs the verifier's own test suite as a
 `wasm32-wasip1` program under node's WASI.

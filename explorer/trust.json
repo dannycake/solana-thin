@@ -1,0 +1,32 @@
+{
+  "format": "solana-thin/explorer-trust/v1",
+  "note": "The only thing this page trusts: the hash of each epoch's ranked validator set. Set files themselves come from any prover and are held to these hashes. See docs/SETS.md for how each was read.",
+  "clusters": {
+    "mainnet-beta": {
+      "shredVersion": 50093,
+      "slotsPerEpoch": 432000,
+      "warmup": false,
+      "sets": {
+        "1095": {
+          "hash": "0692eac18df0abf9d69df07d9b54b45fb364bde3597ddf26ed6d8a9dd4f62426",
+          "validators": 666,
+          "source": "epoch-stakes map of bank snapshots from three nodes; pinned in tests/mainnet_block.rs"
+        },
+        "1096": {
+          "hash": "87318834564a8a118f5377ac93a24955d914ddc4aa91665a4acbb49e49d93a68",
+          "source": "epoch-stakes map of bank snapshots from three nodes; pinned in tests/mainnet_snapshot.rs"
+        },
+        "1097": {
+          "hash": "f546d44b5bca3e465839870dde98ca0bc1116ec4baba637f044c456dffd4c9b3",
+          "validators": 662,
+          "source": "bank snapshots from three nodes on three networks, and the admission check"
+        },
+        "1098": {
+          "hash": "a3685e2eef253aa24d0b88703a60cfec4a3350f9cf8691c39e045efbe08e26b7",
+          "validators": 659,
+          "source": "bank snapshots from three nodes at slot 474,068,308, and the admission check"
+        }
+      }
+    }
+  }
+}

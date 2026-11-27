@@ -33,6 +33,7 @@ const verifier = Verifier.mainnet(shredVersion);          // a number
 verifier.pin(epoch, validatorSetBytes, pinnedHashBytes);  // epoch is a BigInt; bytes are Uint8Array
 const tx = verifier.verify(proofBytes);                   // throws a VerifyError on refusal
 console.log(tx.slot, tx.finality, tx.transactionId);
+console.log(tx.transaction.accountKeys, tx.transaction.instructions);
 verifier.free();
 ```
 
