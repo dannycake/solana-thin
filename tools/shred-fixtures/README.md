@@ -92,6 +92,16 @@ configuration (tick verification, transaction sanitizing) that this verifier
 does not implement. Signatures are not compared either: the fuzzer re-proofs
 FEC sets but does not sign them.
 
+**The other vectors in the same release are not consumed.** `block.tar.gz` is a
+block-*execution* fixture: it replays a block through the runtime to a bank hash
+(`BlockEffects.bank_hash`), which a verifier does not do and cannot check, and
+it carries no block id to compare. `txn.tar.gz` is a transaction fixture whose
+parse layer the verifier already holds to Agave's own types (the
+`transaction_view` fuzz target). Only the shred vectors test what the verifier
+does — shred parsing and FEC-set roots, the inputs to the block id. Blocks a
+Firedancer validator *produces* on mainnet are checked separately and live by
+`scripts/firedancer-blocks.py`.
+
 ## Exit status
 
 `0` when nothing fails, `1` when the light client accepts a shred the
