@@ -1525,6 +1525,159 @@ fn a_transaction_repeated_after_the_switch_proves_where_it_ran() {
     );
 }
 
+/// Every shred of a switched block names the header's parent, however far
+/// back the switch went. An opened shred of the suffix that names the
+/// switched-to parent instead is refused.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_switched_blocks_shreds_must_name_the_headers_parent() {
+    let w = world();
+    let header_parent = w.blocks[2].block();
+    let final_parent = w.blocks[1].block();
+    let mut b = BlockBuilder::new(1004, header_parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![legacy_transaction(1, &[b"doomed"])]]))
+        .component(&update_parent_component(&final_parent))
+        .component(&entry_batch(&[vec![legacy_transaction(2, &[b"kept"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]));
+    // Shred 96 names the slot two back (the switched-to parent), not one back.
+    b.shred_mut(96).parent_offset = 2;
+    let raw = solana_thin::prover::RawBlock::from_shreds(&b.build()).unwrap();
+    let cert = w.validators.fast_cert(
+        raw.block(&final_parent),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let needed: BTreeSet<u32> = [0, 63, 64, 95, 96].into_iter().collect();
+    assert!(matches!(
+        w.client.verify_transaction(&first_transaction(
+            cert,
+            raw.open(&final_parent, &needed),
+            96,
+            None
+        )),
+        Err(Error::InvalidShred(_))
+    ));
+}
+
+/// A switch may go to another block of the header's parent slot: a duplicate
+/// block of that slot, which Agave allows (the marker's slot may equal the
+/// header's parent slot). The verifier and the honest prover take it. A
+/// marker naming the header's own block, or a later slot, the prover refuses.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_switch_to_another_block_of_the_same_slot_proves() {
+    let w = world();
+    let header_parent = w.blocks[2].block();
+    let duplicate = BlockRef {
+        slot: header_parent.slot,
+        id: [0x77; 32],
+    };
+    let (block, cert) = switched_in(&w, 1004, header_parent, duplicate);
+    let verified = w
+        .client
+        .verify_transaction(&suffix_proof(&block, &cert))
+        .unwrap();
+    assert_eq!(verified.parent, duplicate);
+
+    let build = |header: BlockRef, to: BlockRef| {
+        BlockBuilder::new(1004, header, SHRED_VERSION)
+            .header()
+            .component(&update_parent_component(&to))
+            .component(&entry_batch(&[vec![legacy_transaction(2, &[b"x"])]]))
+            .component(&footer_component([0; 32], 1, b"", None))
+            .component(&entry_batch(&[vec![]]))
+            .build()
+    };
+    assert_eq!(
+        BlockData::from_shreds(&build(header_parent, duplicate))
+            .unwrap()
+            .parent(),
+        duplicate
+    );
+    let older = w.blocks[1].block();
+    for (header, to) in [(header_parent, header_parent), (older, header_parent)] {
+        assert_eq!(
+            BlockData::from_shreds(&build(header, to)).unwrap_err(),
+            Error::UpdateParentBlock
+        );
+    }
+}
+
+/// A validator takes a FEC set's first shred for a marker only when the shred
+/// before it ends a component (`DATA_COMPLETE`). Bytes shaped like an
+/// UpdateParent at the start of a set, in the middle of a batch, are batch
+/// bytes: opened beside the real marker, they are not a second one.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn marker_bytes_inside_a_batch_are_not_a_marker() {
+    let w = world();
+    let header_parent = w.blocks[2].block();
+    let final_parent = w.blocks[1].block();
+    let big: Vec<Vec<u8>> = (0..40).map(|i| sized_transaction(800 + i, 900)).collect();
+    // 0 header, 32 a batch running past shred 64, 96 marker, 128 kept.
+    let mut b = BlockBuilder::new(1004, header_parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[big]))
+        .component(&update_parent_component(&final_parent))
+        .component(&entry_batch(&[vec![legacy_transaction(2, &[b"kept"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]));
+    assert_eq!(b.shred_mut(63).flags & FLAG_DATA_COMPLETE, 0);
+    let marker = update_parent_component(&final_parent);
+    let shred = b.shred_mut(64);
+    shred.size = (88 + marker.len()) as u16;
+    shred.body = marker;
+    let payloads = b.build();
+    // On its own, shred 64 reads as a marker.
+    let raw = solana_thin::prover::RawBlock::from_shreds(&payloads).unwrap();
+    assert!(matches!(
+        block::parse_marker(&raw.shred_data(64)),
+        Ok(block::Marker::UpdateParent { .. })
+    ));
+    let data = BlockData::from_shreds_with_final_parent(&payloads, final_parent).unwrap();
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let needed: BTreeSet<u32> = [0, 63, 64, 95, 96, 127, 128].into_iter().collect();
+    let verified = w
+        .client
+        .verify_transaction(&first_transaction(cert, data.open(&needed), 128, None))
+        .unwrap();
+    assert!(verified.has_memo(b"kept"));
+}
+
+/// A suffix transaction whose batch runs on past a FEC set boundary: the
+/// proof opens a shred at a boundary in the middle of a batch, which is not a
+/// marker, and still proves.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_suffix_batch_across_fec_sets_proves() {
+    let w = world();
+    let big: Vec<Vec<u8>> = (0..40).map(|i| sized_transaction(700 + i, 900)).collect();
+    let block = update_parent_block(
+        1004,
+        w.blocks[2].block(),
+        w.blocks[1].block(),
+        SHRED_VERSION,
+        &[vec![vec![legacy_transaction(1, &[b"doomed"])]]],
+        &[vec![big]],
+        None,
+    );
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    // The last transaction of a batch that runs past shred 96 + 31.
+    let proof = prover::prove(cert, &[&block], &signature_for(739), true).unwrap();
+    assert!(proof.block.sets.iter().any(|s| s.set == 4 && s.first == 0));
+    assert!(w.client.verify_transaction(&proof).is_ok());
+}
+
 /// A valid opening of one block, attached to a valid certificate for another.
 #[test]
 fn shreds_of_one_block_do_not_open_another() {
