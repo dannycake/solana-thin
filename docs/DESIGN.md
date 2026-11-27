@@ -272,15 +272,33 @@ transaction is to parse from the start of the batch. So the verifier requires:
    A block has such a parent only when it is built directly on a cluster's
    first block, and the verifier proves nothing in those (`ZeroParentId`).
 
-   **If parent switches are ever supported**, the rule would be: with `H`
-   the header from shred 0 alone and `P` the tree's parent, accept when
-   `H == P` and `P`'s id is not zero; or when the proof opens shreds `u - 1`
-   and `u = 32k`, shred `u - 1` is flagged `DATA_COMPLETE`, shred `u`'s own
-   data parses as an `UpdateParent` naming `P`, the slot is the first of its
-   leader window, and the claim's component starts at or after `u`. That is
-   how the blockstore recognizes the marker (`maybe_parse_update_parent`),
-   and it allows only one. It is not implemented: the feature is inactive on
-   mainnet.
+   **Parent switches** (fast leader handover) are supported behind the
+   default-off `fast-leader-handover` feature. With `H` the header from shred 0
+   alone and `P` the tree's parent: when `H == P` and `P`'s id is not zero, the
+   block did not switch and the whole of it ran (today's path). When `H != P`
+   the leader switched part way, and a proof for a transaction in the executed
+   *suffix* is accepted when the proof opens shreds `u - 1` and `u = 32k`, shred
+   `u - 1` is flagged `DATA_COMPLETE`, shred `u`'s own data parses as an
+   `UpdateParent` naming `P` (which must be a real block, `P`'s id not zero,
+   `P.slot <= H.slot`), the slot is the first of its leader window
+   (`slot % 4 == 0`), and the claim's component starts at or after `u`. A claim
+   before `u`, in the abandoned prefix, is refused (`AbandonedPrefix`), as is a
+   footer before `u`. That is how the blockstore recognizes the marker
+   (`maybe_parse_update_parent`), and it allows only one; "at most one marker"
+   and "first in window" are enforced by Agave before finality, so the
+   certificate stands for them, as it does for the rules a verifier cannot see.
+
+   One point confirmed against Agave while implementing, against an early guess:
+   a switched block's shreds all keep **the header's** parent offset (`H`), not
+   the switched-to parent's. The shred parent offset is a single slot-wide
+   value, checked equal to the block header's parent and `>=` the marker's
+   (`ParentInfo::validate_shred_parent`); the `UpdateParent` marker re-parents
+   replay without touching the shred headers. So on the switch path every opened
+   shred must name `H`, where on the ordinary path it names `P`.
+
+   **Default builds refuse every switched block** (`UpdateParentBlock`), as they
+   must until a cluster activates fast leader handover; the feature changes only
+   what the verifier accepts, never the wire format or a default build's bytes.
 2. **The shred before the component, flagged `DATA_COMPLETE`.** Without it a
    proof could start parsing in the middle of a batch, inside bytes an
    attacker chose. The flag is inside the hashed leaf.
@@ -291,7 +309,8 @@ transaction is to parse from the start of the batch. So the verifier requires:
    the body, no "last in slot" without "data complete", "data complete"
    only on the last data shred of a FEC set, and a parent offset that is
    non-zero and does not reach past slot 0. After the header check, every
-   opened shred must also name the parent slot the tree commits to. A
+   opened shred must also name the parent slot the tree commits to (or, on
+   the fast-leader-handover switch path, the header's parent slot). A
    validator drops or dies on each of these, so a block that shows one was
    never completed. Components therefore start only at the first shred of a
    FEC set.

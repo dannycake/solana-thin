@@ -188,14 +188,16 @@ resistance. A *leader* willing to spend on the order of 2^80 hashes could build
 two shreds that collide and show a light client the one validators never saw.
 The validators themselves run on the same margin.
 
-**6. Blocks that switch parent mid-way are refused.** With fast leader
-handover a leader may switch parent partway through a block, abandoning its
-first part. The verifier cannot prove which part of such a block ran, so v0.1
-detects these blocks and refuses to prove anything in them rather than work
-out which part ran. The feature is not active on mainnet as of November 2026,
-so today this refuses nothing there. For the same reason nothing can be proven
-in a block whose parent id is all zeros, which is only ever a block built
-directly on a cluster's first block.
+**6. Blocks that switch parent mid-way are refused by default.** With fast
+leader handover a leader may switch parent partway through a block, abandoning
+its first part. By default the verifier refuses to prove anything in such a
+block. The optional, default-off `fast-leader-handover` feature lets it prove a
+transaction in the executed *suffix* (at or after the `UpdateParent` marker)
+while still refusing the abandoned prefix (`AbandonedPrefix`); the default build
+is byte-for-byte unchanged and keeps refusing. The feature is not active on
+mainnet as of November 2026, so there is nothing there to prove either way.
+Nothing can be proven in a block whose parent id is all zeros, which is only
+ever a block built directly on a cluster's first block.
 
 ## Attacks this is built to refuse
 
@@ -205,7 +207,7 @@ that builds the attack and checks the reason it is rejected.
 | Attack | Why it works on a careless client | Rejected as |
 |---|---|---|
 | Embedded transaction | Your signed transaction's bytes are placed inside another transaction's data. They are in the block, correctly Merkle-proven, and never ran. | `NotComponentStart` |
-| Abandoned prefix | A transaction sits in the part of a block the leader discarded. | `UpdateParentBlock` |
+| Abandoned prefix | A transaction sits in the part of a block the leader discarded before switching parent. | `UpdateParentBlock` (default) / `AbandonedPrefix` (with `fast-leader-handover`) |
 | Split header | A block header not contained wholly within shred 0, where the verifier reads it. | `InvalidComponent` |
 | Zero parent id | A block built directly on a cluster's first block, whose parent id is all zeros; the verifier proves nothing in one. | `ZeroParentId` |
 | Shreds no validator keeps | A completion flag in the middle of a FEC set, or a parent offset that disagrees with the block's parent. Validators drop such shreds, so the block they come from was never completed. | `InvalidShred` |
@@ -378,8 +380,10 @@ its own, `cargo test --features testkit` runs everything else, and a plain
   Elsewhere: about 1 ms natively and 7 ms in wasm, with the set loaded in
   about 30 ms and 170 ms.
 
-What is not tested: a block whose leader switched parent (no public cluster
-produces one), and a run on physical Android hardware (an emulator ran).
+What is not tested on real data: a block whose leader switched parent (no
+public cluster produces one; the differential oracle builds and judges them
+through Agave's own code instead), and a run on physical Android hardware (an
+emulator ran).
 
 ## Using it
 
@@ -398,6 +402,7 @@ Cargo features, all off by default:
 | `no-threads` | `blst` checks signatures on the calling thread. Without it, `blst` starts a thread pool the first time a signature is checked. Turn it on for a phone or an embedded host. Targets without threads, such as `wasm32-unknown-unknown`, get it without asking. |
 | `portable` | `blst` chooses its instructions when it runs, not when it is built. Without it, an x86-64 build uses ADX if the build machine has it and stops with an illegal instruction on a CPU that does not. Turn it on for a binary built on one machine and run on another. |
 | `testkit` | Deterministic block and validator builders for tests and examples. |
+| `fast-leader-handover` | Prove a transaction in the executed suffix of a block that switched parent mid-way, and keep refusing the abandoned prefix. Off until a cluster activates fast leader handover; a default build refuses every such block and is byte-for-byte unchanged. |
 
 From Kotlin, Swift or JavaScript: [docs/BINDINGS.md](docs/BINDINGS.md). A
 `Verifier` object takes a validator set and its pinned hash for an epoch,

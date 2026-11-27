@@ -536,8 +536,9 @@ shared ones.
    header rule, and never run.
 2. **What blocks look like once fast leader handover is active.** Its
    feature has no account on mainnet, testnet or devnet, and none of 805
-   captured blocks switched parent. The rules for such blocks are tested
-   only on hand-built ones.
+   captured blocks switched parent. The rules for such blocks are tested on
+   hand-built ones and on blocks the differential oracle builds and judges
+   through Agave's own code, never on one a real cluster produced.
 3. **Blocks from other clients.** 72 mainnet blocks from Firedancer leaders
    and 38 testnet blocks from leaders not running Agave verified. Firedancer
    itself was never run as an oracle.
@@ -616,7 +617,16 @@ the same as none existing.
 3. **Outside review.** Post to the Solana developer forum and ask Anza or
    Firedancer engineers to check the certificate and block id handling. The
    three protocol asks in `DESIGN.md` are a natural thread.
-4. **Support UpdateParent blocks** if a wider sample of mainnet shows them.
+4. **Support UpdateParent blocks** — done, behind the default-off
+   `fast-leader-handover` feature. The verifier proves a transaction in the
+   executed suffix (at or after the `UpdateParent` marker) and refuses the
+   abandoned prefix (`AbandonedPrefix`); the differential oracle validates it,
+   accepting only coordinates Agave executed. What is left is a live sample: no
+   public cluster has activated fast leader handover, so no real switched block
+   has been seen. One premise confirmed while building, against an early guess:
+   a switched block's shreds all carry the *header's* parent offset, not the
+   switched-to parent's (the shred offset is one slot-wide value, and the
+   `UpdateParent` marker re-parents replay without touching it).
 5. **Shrink proofs.** The median is 21.6 KB because a proof carries the batch
    in front of its transaction. Nothing in the crate can fix that; a protocol
    change could (see `DESIGN.md`, open questions).
