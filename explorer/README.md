@@ -78,7 +78,8 @@ from a source you trust, or take the prover's word for it, labeled as such.
 Either is kept in this browser only once a set matching it has been pinned, and
 can be forgotten under *Pinned set hashes*.
 
-Mainnet epochs last about two days. Publishing this page means adding each new
+Mainnet epochs last about a day (432,000 slots at about 0.215 s each, measured
+in November 2026). Publishing this page means adding each new
 epoch's hash to `trust.json`, from a set log you have checked, and rebuilding.
 
 ## Building
