@@ -292,8 +292,11 @@ impl<'a> VerifiedShreds<'a> {
     /// boundary) and the parent it names. An error if the opened shreds show
     /// no such marker, or more than one.
     ///
-    /// Only the opened shreds are scanned; `component` already enforces that a
-    /// start is a FEC-set boundary whose previous shred is `DATA_COMPLETE`.
+    /// Only the opened shreds are scanned, and only at a FEC-set boundary whose
+    /// previous shred is opened and `DATA_COMPLETE`. A marker is read from the
+    /// data of that one shred, as a validator's blockstore reads it
+    /// (`maybe_parse_update_parent`): bytes that only parse as a marker when
+    /// joined with the next shred are not one.
     /// "At most one marker in the whole block" is relied on from finality, as
     /// with other rules a certificate already enforces: a block Agave marked
     /// dead for a second marker (`MultipleUpdateParents`) has no certificate to
@@ -317,7 +320,11 @@ impl<'a> VerifiedShreds<'a> {
             {
                 continue;
             }
-            let data = self.component(index)?;
+            // From this one shred's data, as a validator's blockstore reads a
+            // marker: one cut across shreds is no marker to it, and must not
+            // be taken here for a switch point it never was.
+            let mut data = Vec::new();
+            self.get(index)?.append_data(&mut data)?;
             if let Ok(Marker::UpdateParent { parent }) = crate::block::parse_marker(&data) {
                 if found.is_some() {
                     return Err(Error::UpdateParentBlock);

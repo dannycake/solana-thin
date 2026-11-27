@@ -111,13 +111,22 @@ impl BlockData {
             Ok(Marker::Header { parent }) => Some(parent),
             _ => None,
         };
-        // The opened UpdateParent markers, by first shred, in block order.
+        // The UpdateParent markers, by first shred, in block order. Like the
+        // header, a marker counts only if it sits whole in its first shred,
+        // which is all a validator's blockstore reads of it.
         let markers: Vec<(u32, BlockRef)> = components
             .iter()
-            .filter(|c| !block::is_entry_batch(&c.data))
-            .filter_map(|c| match block::parse_marker(&c.data) {
-                Ok(Marker::UpdateParent { parent }) => Some((c.start, parent)),
-                _ => None,
+            .filter(|c| c.start > 0 && !block::is_entry_batch(&c.data))
+            .filter_map(|c| {
+                let mut first = Vec::new();
+                shreds[c.start as usize]
+                    .shred
+                    .append_data(&mut first)
+                    .ok()?;
+                match block::parse_marker(&first) {
+                    Ok(Marker::UpdateParent { parent }) => Some((c.start, parent)),
+                    _ => None,
+                }
             })
             .collect();
         let (parent, switch) = resolve_parent(header_parent, &markers, final_parent)?;

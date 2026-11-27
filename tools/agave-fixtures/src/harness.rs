@@ -2099,6 +2099,15 @@ pub fn enumerate(raw: &RawBlock) -> Vec<Candidate> {
             Ok(Marker::UpdateParent { .. })
         )
     });
+    let all_markers: Vec<(u32, u32)> = raw
+        .component_starts()
+        .into_iter()
+        .filter_map(|start| {
+            let (bytes, last) = raw.component(start);
+            matches!(block::parse_marker(&bytes), Ok(Marker::UpdateParent { .. }))
+                .then_some((start, last))
+        })
+        .collect();
     let mut out = Vec::new();
     for start in 0..raw.shred_count() {
         let (bytes, last) = raw.component(start);
@@ -2122,6 +2131,23 @@ pub fn enumerate(raw: &RawBlock) -> Vec<Candidate> {
                 needed.insert(start - 1);
             }
             needed.extend(start..=holder);
+            // Also offer the claim with each component that parses as a
+            // marker opened whole, one at a time: a verifier that read a
+            // marker across shreds would then be shown each one it could
+            // mistake for the switch point.
+            for &(m, m_last) in &all_markers {
+                let mut alt = needed.clone();
+                if m > 0 {
+                    alt.insert(m - 1);
+                }
+                alt.extend(m..=m_last);
+                out.push(Candidate {
+                    component_start: start,
+                    position,
+                    transaction: transaction.clone(),
+                    needed: alt,
+                });
+            }
             if let Some(u) = marker {
                 if u > 0 {
                     needed.insert(u - 1);

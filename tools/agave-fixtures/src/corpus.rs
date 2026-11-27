@@ -849,6 +849,92 @@ pub fn corpus() -> Vec<Case> {
             l.chunks.insert(2, vec![0]);
         },
     ));
+    // An UpdateParent cut across two shreds, then a whole one. The
+    // blockstore reads a marker from the first shred of its FEC set alone, so
+    // it sees only the whole one, and replay resumes there: a verifier that
+    // read the split one across shreds would take the wrong switch point.
+    cases.push(with_layout(
+        handover(up(
+            "split-marker-then-whole",
+            "content/update-parent-ancestor",
+            vec![
+                Item::Header(SIDE),
+                b(&[1]),
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::Footer,
+                Item::Tick,
+            ],
+            voted(1, 128, 160),
+        )),
+        |l| {
+            l.chunks.insert(2, vec![20]);
+        },
+    ));
+    // The same, the split marker naming another parent than the whole one.
+    cases.push(with_layout(
+        handover(up(
+            "split-marker-other-parent",
+            "content/update-parent-ancestor",
+            vec![
+                Item::Header(SIDE),
+                b(&[1]),
+                Item::Switch(GENESIS),
+                b(&[1]),
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::Footer,
+                Item::Tick,
+            ],
+            voted(1, 128, 160),
+        )),
+        |l| {
+            l.chunks.insert(2, vec![20]);
+        },
+    ));
+    cases.push(with_layout(
+        handover(up(
+            "split-marker-then-footer",
+            "content/update-parent-ancestor",
+            vec![
+                Item::Header(SIDE),
+                b(&[1]),
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::DecoyFooter,
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::Footer,
+                Item::Tick,
+            ],
+            voted(1, 160, 192),
+        )),
+        |l| {
+            l.chunks.insert(2, vec![20]);
+        },
+    ));
+    cases.push(with_layout(
+        handover(up(
+            "whole-marker-then-split",
+            "content/update-parent-broken",
+            vec![
+                Item::Header(SIDE),
+                b(&[1]),
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::Switch(MAIN),
+                b(&[1]),
+                Item::Footer,
+                Item::Tick,
+            ],
+            NotVoted,
+        )),
+        |l| {
+            l.chunks.insert(4, vec![20]);
+        },
+    ));
     cases.push(up(
         "two-markers",
         "content/update-parent-broken",

@@ -1308,6 +1308,174 @@ fn a_footer_in_the_abandoned_prefix_is_refused() {
     );
 }
 
+/// `marker` cut across the first two shreds of one FEC set (20 bytes, then the
+/// rest), padded out to the end of the set, its last shred `DATA_COMPLETE`.
+#[cfg(feature = "fast-leader-handover")]
+fn split_marker(builder: BlockBuilder, marker: &[u8]) -> BlockBuilder {
+    let mut shreds = vec![builder.shred(&marker[..20]), builder.shred(&marker[20..])];
+    for _ in 2..32 {
+        shreds.push(builder.shred(&[]));
+    }
+    shreds.last_mut().unwrap().flags |= FLAG_DATA_COMPLETE;
+    builder.push_shreds(shreds)
+}
+
+/// A block with a decoy UpdateParent cut across shreds 64 and 65, and a real
+/// one whole in shred 128 (or later, with `between`):
+///
+/// ```text
+///   0 header (slot 1003)     96 batch [doomed]   128 UpdateParent, whole
+///  32 batch [prefix]        (between)            160 batch [kept]
+///  64 UpdateParent, split                        192 footer, 224 tick
+/// ```
+///
+/// A validator's blockstore reads a marker from the first shred of its FEC
+/// set alone, so it sees only the real marker and replays from there.
+#[cfg(feature = "fast-leader-handover")]
+fn split_decoy_block(w: &World, between: Option<Vec<u8>>) -> (Vec<Vec<u8>>, BlockRef) {
+    let header_parent = w.blocks[2].block();
+    let final_parent = w.blocks[1].block();
+    let mut b = BlockBuilder::new(1004, header_parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![legacy_transaction(1, &[b"prefix"])]]));
+    b = split_marker(b, &update_parent_component(&final_parent));
+    b = b.component(&entry_batch(&[vec![legacy_transaction(2, &[b"doomed"])]]));
+    if let Some(extra) = between {
+        b = b.component(&extra);
+    }
+    let payloads = b
+        .component(&update_parent_component(&final_parent))
+        .component(&entry_batch(&[vec![legacy_transaction(3, &[b"kept"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]))
+        .build();
+    (payloads, final_parent)
+}
+
+#[cfg(feature = "fast-leader-handover")]
+fn first_transaction(
+    cert: FinalityCert,
+    block: BlockProof,
+    start: u32,
+    footer: Option<u32>,
+) -> TxProof {
+    TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block,
+        component_start: start,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: footer,
+    }
+}
+
+/// An UpdateParent cut across two shreds is no marker to a validator, which
+/// reads one from a single shred. Read across shreds, it would be a switch
+/// point earlier than the real one, and a transaction between the two, never
+/// executed, would be in the "suffix". The verifier reads a marker from its
+/// shred alone: shown only the split one, it finds no marker; shown the real
+/// one too, it places the claim in the abandoned prefix.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_marker_split_across_shreds_is_not_a_switch_point() {
+    let w = world();
+    let (payloads, final_parent) = split_decoy_block(&w, None);
+    let data = BlockData::from_shreds_with_final_parent(&payloads, final_parent).unwrap();
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let claim = |needed: &[u32]| {
+        let needed: BTreeSet<u32> = needed.iter().copied().collect();
+        first_transaction(cert.clone(), data.open(&needed), 96, None)
+    };
+    // The header, the split marker, and the doomed batch after it.
+    assert_eq!(
+        w.client
+            .verify_transaction(&claim(&[0, 63, 64, 65, 95, 96])),
+        Err(Error::UpdateParentBlock)
+    );
+    // And the real marker.
+    assert_eq!(
+        w.client
+            .verify_transaction(&claim(&[0, 63, 64, 65, 95, 96, 127, 128])),
+        Err(Error::AbandonedPrefix)
+    );
+}
+
+/// The same split marker, with a footer between it and the real marker. A
+/// verifier that took the split marker for the switch point would report that
+/// footer, which never ran, as the block's.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_footer_after_a_split_marker_is_not_the_blocks_footer() {
+    let w = world();
+    let decoy = footer_component([0xde; 32], 7, b"decoy", None);
+    // 0 header, 32 prefix, 64 split marker, 96 doomed, 128 decoy footer,
+    // 160 real marker, 192 kept, 224 footer, 256 tick.
+    let (payloads, final_parent) = split_decoy_block(&w, Some(decoy));
+    let data = BlockData::from_shreds_with_final_parent(&payloads, final_parent).unwrap();
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let claim = |needed: &[u32]| {
+        let needed: BTreeSet<u32> = needed.iter().copied().collect();
+        first_transaction(cert.clone(), data.open(&needed), 192, Some(128))
+    };
+    assert_eq!(
+        w.client
+            .verify_transaction(&claim(&[0, 63, 64, 65, 95, 127, 128, 191, 192])),
+        Err(Error::UpdateParentBlock)
+    );
+    assert_eq!(
+        w.client
+            .verify_transaction(&claim(&[0, 63, 64, 65, 127, 128, 159, 160, 191, 192])),
+        Err(Error::AbandonedPrefix)
+    );
+}
+
+/// The block a validator keeps, the honest prover keeps too: it reads markers
+/// as the blockstore does, finds the one real switch, and proves what ran.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_block_with_a_split_marker_proves_its_executed_suffix() {
+    let w = world();
+    let (payloads, final_parent) = split_decoy_block(&w, None);
+    let data = BlockData::from_shreds(&payloads).unwrap();
+    assert_eq!(data.parent(), final_parent);
+    let cert = w.validators.fast_cert(
+        data.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    let proof = prover::prove(cert.clone(), &[&data], &signature_for(3), true).unwrap();
+    let verified = w.client.verify_transaction(&proof).unwrap();
+    assert!(verified.has_memo(b"kept"));
+    assert_eq!(verified.parent, final_parent);
+    // Every shred opened: the claim still proves, and the doomed one does not.
+    let everything: BTreeSet<u32> = (0..data.shred_count()).collect();
+    assert!(w
+        .client
+        .verify_transaction(&first_transaction(
+            cert.clone(),
+            data.open(&everything),
+            160,
+            None
+        ))
+        .is_ok());
+    assert_eq!(
+        w.client
+            .verify_transaction(&first_transaction(cert, data.open(&everything), 96, None)),
+        Err(Error::AbandonedPrefix)
+    );
+}
+
 /// A valid opening of one block, attached to a valid certificate for another.
 #[test]
 fn shreds_of_one_block_do_not_open_another() {
