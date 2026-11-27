@@ -329,7 +329,10 @@ its own, `cargo test --features testkit` runs everything else, and a plain
     client, from six minutes to 22 hours old. 455 of 455 certificates verify
     (451 fast, 4 slow) and 175,981 of 175,981 transactions prove and verify:
     legacy, v0 with up to 14 lookup tables, and v1. 72 of the blocks were
-    led by Firedancer validators.
+    led by Firedancer validators; `scripts/firedancer-blocks.py` reproduces
+    that cross-client check as a committed tool and has since verified blocks
+    led by Firedancer's v26.11.1 mainnet Alpenglow release
+    ([docs/NOTES.md](docs/NOTES.md)).
   - Testnet and devnet (Agave 4.5 beta): 288 blocks, 288 certificates
     (282 fast, 6 slow), 7,419 of 7,419 transactions, against sets of 481 and
     21 validators taken from `getVatActiveSetRankMap`.

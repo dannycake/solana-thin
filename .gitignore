@@ -10,3 +10,6 @@ crates/solana-thin-wasm/LICENSE
 crates/solana-thin-wasm/*.tgz
 solana_thin_ffiFFI.xcframework/
 *.xcframework.zip
+
+# the prover keeps fetched blocks and proofs here by default
+prover-store/
