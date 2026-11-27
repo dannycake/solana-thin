@@ -23,6 +23,11 @@ default = []
 # Deterministic block and validator builders used by the test suite and examples.
 # Never needed by a verifier.
 testkit = []
+# Accept a proof for a transaction in the executed suffix of a block that
+# switched parent mid-way under fast leader handover (an UpdateParent marker).
+# Off by default: a default build refuses every such block, as it must until a
+# cluster activates fast leader handover. See `docs/DESIGN.md`.
+fast-leader-handover = []
 # Passed through to `blst`. Without `no-threads`, blst checks signatures on a
 # thread pool it starts the first time one is checked; with it, all work stays
 # on the calling thread. A phone or an embedded host usually wants it on.

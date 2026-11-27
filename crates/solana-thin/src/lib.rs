@@ -55,6 +55,9 @@
 //!   [`transaction`]: the layers, each usable on its own.
 //! * `testkit` (feature `testkit`): deterministic blocks and validators for
 //!   tests and examples.
+//! * `fast-leader-handover` (feature, off by default): accept a proof for a
+//!   transaction in the executed suffix of a block that switched parent
+//!   mid-way. A default build refuses every such block. See `docs/DESIGN.md`.
 
 pub mod block;
 pub mod certificate;

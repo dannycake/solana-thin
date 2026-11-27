@@ -93,8 +93,18 @@ pub enum Error {
     NotComponentStart,
     /// The component bytes are not what the claim says they are.
     InvalidComponent(&'static str),
-    /// The block switched parent part way through, so part of it was never
-    /// executed. This version refuses to prove inclusion in such blocks.
+    /// The claim names a transaction (or a footer) in the abandoned prefix of
+    /// a block that switched parent, before the shred where execution resumed.
+    /// The block is final and its executed suffix can be proven; this part of
+    /// it never ran. Only returned with the `fast-leader-handover` feature,
+    /// which is what makes the suffix provable at all.
+    AbandonedPrefix,
+    /// The block switched parent part way through. Without the
+    /// `fast-leader-handover` feature this version refuses to prove inclusion
+    /// in such a block at all. With the feature it is returned when the switch
+    /// itself cannot be validated from the proof (no marker opened, a marker
+    /// that does not name the block's parent, a switch that is not first in a
+    /// leader window, or more than one marker).
     UpdateParentBlock,
     /// The block's parent id is all zeros. Validators do not record such a
     /// header as naming a parent, so they would not notice a later switch to
@@ -133,7 +143,7 @@ pub enum Error {
 /// | [`InvalidValidatorSet`](Self::InvalidValidatorSet) | The validator set offered was refused: it is not the set the pinned hash names, or it breaks a rule every real set keeps. Nothing was pinned. Fetch the set from another source; if every source gives the same bytes, the hash is the wrong one. | `InvalidPublicKey`, `ZeroStake`, `EmptyValidatorSet`, `DuplicateValidator`, `UnsortedValidatorSet`, `ValidatorSetHashMismatch`, `StakeOverflow` |
 /// | [`EpochNotPinned`](Self::EpochNotPinned) | The client holds no validator set that can judge this certificate: none is pinned for its epoch, or its slot is in a warm-up epoch the schedule does not cover. The proof may well be good. Pin that epoch's set and check it again. | `UnknownEpoch`, `SlotBeforeSchedule` |
 /// | [`CertificateRejected`](Self::CertificateRejected) | The certificate does not show that the pinned validators finalized the block: its signature does not verify for the signers it names, or they hold too little stake. The cluster, the set or the certificate is the wrong one. Treat the block as not final. | `InvalidBitmap`, `RankOutOfRange`, `NoSigners`, `InvalidSignature`, `SignatureMismatch`, `InsufficientStake` |
-/// | [`ProofRejected`](Self::ProofRejected) | The proof does not tie a transaction to the certified block: its shreds do not hash to the block id, do not chain back to it, or do not hold a transaction where the proof says. From [`ThinClient::verify_transaction`](crate::ThinClient::verify_transaction) this comes after the certificate verified, so the block may be final; the transaction is not shown to be in it. | `InvalidMerkleProof`, `BlockIdMismatch`, `InvalidShred`, `MissingShred`, `DuplicateShred`, `NotComponentStart`, `InvalidComponent`, `TransactionNotFound`, `BrokenAncestry`, `InvalidParent` |
+/// | [`ProofRejected`](Self::ProofRejected) | The proof does not tie a transaction to the certified block: its shreds do not hash to the block id, do not chain back to it, or do not hold a transaction where the proof says (`AbandonedPrefix`: it holds one, but in a part of a switched block that never ran). From [`ThinClient::verify_transaction`](crate::ThinClient::verify_transaction) this comes after the certificate verified, so the block may be final; the transaction is not shown to be in it. | `InvalidMerkleProof`, `BlockIdMismatch`, `InvalidShred`, `MissingShred`, `DuplicateShred`, `NotComponentStart`, `InvalidComponent`, `AbandonedPrefix`, `TransactionNotFound`, `BrokenAncestry`, `InvalidParent` |
 /// | [`WrongTransaction`](Self::WrongTransaction) | The proof is sound, but for another transaction than the one asked for. (From the prover: the block does not hold that transaction.) Nothing is known about the one asked for. | `SignatureNotFound` |
 /// | [`UnprovableBlock`](Self::UnprovableBlock) | The block is final, but of a kind this version refuses to prove anything in, because part of it may never have run. No proof for that block will pass. Not a sign of an attack, and not a statement about the transaction. | `UpdateParentBlock`, `ZeroParentId` |
 /// | [`InvalidParameters`](Self::InvalidParameters) | The call is wrong whatever the proof says: cluster parameters no cluster has, or a second, different set for an epoch that already has one. A bug in the caller, or two sources of trust that disagree. | `EpochAlreadyPinned`, `InvalidClusterParams` |
@@ -209,6 +219,7 @@ impl Error {
             | Error::DuplicateShred
             | Error::NotComponentStart
             | Error::InvalidComponent(_)
+            | Error::AbandonedPrefix
             | Error::TransactionNotFound
             | Error::BrokenAncestry
             | Error::InvalidParent => ErrorKind::ProofRejected,
@@ -274,6 +285,10 @@ impl fmt::Display for Error {
             Error::DuplicateShred => write!(f, "shred supplied twice"),
             Error::NotComponentStart => write!(f, "claimed component start is not a boundary"),
             Error::InvalidComponent(what) => write!(f, "invalid block component: {what}"),
+            Error::AbandonedPrefix => write!(
+                f,
+                "the claim is in the abandoned prefix of a block that switched parent"
+            ),
             Error::ZeroParentId => write!(
                 f,
                 "the block's parent id is all zeros; a parent switch cannot be ruled out"
@@ -339,6 +354,7 @@ mod tests {
             Error::DuplicateShred,
             Error::NotComponentStart,
             Error::InvalidComponent("x"),
+            Error::AbandonedPrefix,
             Error::UpdateParentBlock,
             Error::ZeroParentId,
             Error::UnsupportedTransaction,
@@ -403,7 +419,7 @@ mod tests {
         assert_eq!(all, kinds, "ALL lists every kind");
 
         let variants = sorted(declared("Error"));
-        assert_eq!(variants.len(), 37);
+        assert_eq!(variants.len(), 38);
         let listed = table.iter().flat_map(|(_, row)| row.iter().copied());
         assert_eq!(sorted(listed), variants, "each variant in one row");
 
