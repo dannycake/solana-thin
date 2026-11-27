@@ -52,6 +52,10 @@ pub struct BlockData {
     fec_roots: Vec<Hash>,
     tree: Tree,
     components: Vec<Component>,
+    /// First shred of the single `UpdateParent` marker, if the block switched
+    /// parent mid-way. A suffix proof opens it so the verifier can find the
+    /// switch point.
+    switch: Option<u32>,
 }
 
 impl BlockData {
@@ -103,26 +107,20 @@ impl BlockData {
         // a validator's blockstore reads it. See `ThinClient::verify_transaction`.
         let mut first_shred = Vec::new();
         shreds[0].shred.append_data(&mut first_shred)?;
-        let parent = match block::parse_marker(&first_shred) {
+        let header_parent = match block::parse_marker(&first_shred) {
             Ok(Marker::Header { parent }) => Some(parent),
             _ => None,
         };
-        for component in &components {
-            if block::is_entry_batch(&component.data) {
-                continue;
-            }
-            if let Ok(Marker::UpdateParent { .. }) = block::parse_marker(&component.data) {
-                if final_parent.is_none() {
-                    return Err(Error::UpdateParentBlock);
-                }
-            }
-        }
-        let parent = match final_parent {
-            Some(parent) => parent,
-            None => parent.ok_or(Error::InvalidComponent(
-                "block does not start with a header",
-            ))?,
-        };
+        // The opened UpdateParent markers, by first shred, in block order.
+        let markers: Vec<(u32, BlockRef)> = components
+            .iter()
+            .filter(|c| !block::is_entry_batch(&c.data))
+            .filter_map(|c| match block::parse_marker(&c.data) {
+                Ok(Marker::UpdateParent { parent }) => Some((c.start, parent)),
+                _ => None,
+            })
+            .collect();
+        let (parent, switch) = resolve_parent(header_parent, &markers, final_parent)?;
 
         let tree = block_tree(&fec_roots, &parent);
         Ok(Self {
@@ -135,6 +133,7 @@ impl BlockData {
             fec_roots,
             tree,
             components,
+            switch,
         })
     }
 
@@ -215,11 +214,20 @@ impl BlockData {
         needed.insert(0u32);
         needed.insert(component.start - 1);
         needed.extend(component.start..=component.last_shred_for(end));
+        // A switched block: open the UpdateParent marker so the verifier can
+        // find the switch point and admit a suffix claim.
+        if let Some(switch) = self.switch {
+            needed.insert(switch.saturating_sub(1));
+            needed.insert(switch);
+        }
         let mut footer_start = None;
         if with_footer {
+            // In a switched block only a footer in the executed suffix is
+            // worth opening; one in the abandoned prefix the verifier refuses.
             if let Some(footer) = self.components.iter().find(|c| {
                 !block::is_entry_batch(&c.data)
                     && matches!(block::parse_marker(&c.data), Ok(Marker::Footer(_)))
+                    && self.switch.is_none_or(|switch| c.start >= switch)
             }) {
                 needed.insert(footer.start - 1);
                 needed.extend(footer.start..=footer.last_shred_for(footer.data.len()));
@@ -244,6 +252,41 @@ impl BlockData {
     /// Panics if `needed` is empty or names a shred the block does not have.
     pub fn open(&self, needed: &BTreeSet<u32>) -> BlockProof {
         open_shreds(&self.shreds, &self.tree, self.parent_link(), needed)
+    }
+}
+
+/// The parent a block's id should commit to, and its switch point.
+///
+/// With no `UpdateParent` marker the parent is the one shred 0's header names.
+/// With one marker the block switched parent mid-way: an honest prover takes
+/// the marker's parent only with the `fast-leader-handover` feature, and
+/// refuses the block otherwise (no proof for its suffix would pass a default
+/// verifier). More than one marker is a block Agave never finalizes. A test's
+/// dishonest prover (`final_parent`) takes the given parent on faith and still
+/// records the single marker so a suffix proof can open it.
+fn resolve_parent(
+    header_parent: Option<BlockRef>,
+    markers: &[(u32, BlockRef)],
+    final_parent: Option<BlockRef>,
+) -> Result<(BlockRef, Option<u32>)> {
+    let no_header = || Error::InvalidComponent("block does not start with a header");
+    let single = (markers.len() == 1).then(|| markers[0].0);
+    match final_parent {
+        Some(parent) => Ok((parent, single)),
+        None => match markers.len() {
+            0 => Ok((header_parent.ok_or_else(no_header)?, None)),
+            1 => {
+                #[cfg(feature = "fast-leader-handover")]
+                {
+                    Ok((markers[0].1, Some(markers[0].0)))
+                }
+                #[cfg(not(feature = "fast-leader-handover"))]
+                {
+                    Err(Error::UpdateParentBlock)
+                }
+            }
+            _ => Err(Error::UpdateParentBlock),
+        },
     }
 }
 

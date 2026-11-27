@@ -7,7 +7,7 @@ use crate::certificate::{
 };
 use crate::error::{Error, Result};
 use crate::merkle::Hash;
-use crate::proof::{Limits, TxProof};
+use crate::proof::{Limits, TxProof, VerifiedShreds};
 use crate::transaction::Transaction;
 use crate::validator_set::{self, ValidatorSet};
 use std::collections::BTreeMap;
@@ -135,6 +135,68 @@ fn warmup_end(slots_per_epoch: u64) -> Option<(u64, u64)> {
     Some((u64::from(epoch), slot))
 }
 
+/// Slots in one leader's window (`NUM_CONSECUTIVE_LEADER_SLOTS` in
+/// `solana-leader-schedule`). A parent switch is legal only in the first slot
+/// of a window, so a switched block's slot is a multiple of this.
+#[cfg(feature = "fast-leader-handover")]
+const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
+
+/// Validates a block whose shred-0 header names a different parent than the
+/// tree commits to: a mid-block parent switch under fast leader handover.
+///
+/// Returns the shred where execution resumed (the `UpdateParent` marker's FEC
+/// set), so the caller can keep a claim in the abandoned prefix out. Without
+/// the `fast-leader-handover` feature every such block is refused.
+#[cfg(not(feature = "fast-leader-handover"))]
+fn verify_parent_switch(
+    _shreds: &VerifiedShreds<'_>,
+    _header_parent: &BlockRef,
+    _slot: u64,
+    _component_start: u32,
+) -> Result<Option<u32>> {
+    Err(Error::UpdateParentBlock)
+}
+
+/// Validates a mid-block parent switch and returns the shred execution resumed
+/// at. Accepts only when a single opened `UpdateParent` marker sits at a FEC
+/// boundary, names the parent the tree commits to (a real block, at or before
+/// the header's parent slot), the slot is first in its leader window, and the
+/// claim is at or after the marker. Everything else is refused. "At most one
+/// marker" and "first in window" are enforced by Agave before finality; the
+/// certificate this proof carries stands for them, as it does elsewhere.
+#[cfg(feature = "fast-leader-handover")]
+fn verify_parent_switch(
+    shreds: &VerifiedShreds<'_>,
+    header_parent: &BlockRef,
+    slot: u64,
+    component_start: u32,
+) -> Result<Option<u32>> {
+    // The parent the tree commits to must be a real block, not genesis: a zero
+    // id cannot be told from an unset one, so a switch to it cannot be ruled in.
+    if shreds.parent.id == [0u8; 32] {
+        return Err(Error::ZeroParentId);
+    }
+    // A leader may only switch parent in the first slot of its window.
+    if slot % NUM_CONSECUTIVE_LEADER_SLOTS != 0 {
+        return Err(Error::UpdateParentBlock);
+    }
+    // Derive the switch point from the one opened UpdateParent marker.
+    let (switch_start, marker_parent) = shreds.single_opened_update_parent()?;
+    // It must name the parent the tree commits to, which must be an ancestor
+    // at or before the header's parent slot (Agave's UpdateParentSlot bounds).
+    if marker_parent != shreds.parent || shreds.parent.slot > header_parent.slot {
+        return Err(Error::UpdateParentBlock);
+    }
+    // The claimed transaction must sit in the executed suffix, not the
+    // abandoned prefix the leader switched away from.
+    if component_start < switch_start {
+        return Err(Error::AbandonedPrefix);
+    }
+    // Every shred still names the header's parent, as a switched block's do.
+    shreds.check_parent_offset_switched(slot, header_parent)?;
+    Ok(Some(switch_start))
+}
+
 /// A block the client has checked a finality certificate for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -169,7 +231,9 @@ pub struct VerifiedTransaction {
     pub transaction: Transaction,
     /// The block it is in.
     pub block: BlockRef,
-    /// That block's parent.
+    /// That block's parent: the one its id commits to. For a block that
+    /// switched parent mid-way (fast leader handover) this is the parent it
+    /// ended on, which the proven transaction's part of the block was built on.
     pub parent: BlockRef,
     /// Index of the first shred of its component.
     pub component_start: u32,
@@ -409,9 +473,11 @@ impl ThinClient {
 
         // 4. The block must have run from its first shred. The header in
         //    shred 0 names the parent the block started on; the tree names
-        //    the parent it ended on. If they differ, the parent was switched
-        //    part way and the verifier cannot show the whole block ran, so it
-        //    refuses the block.
+        //    the parent it ended on. When they agree there was no switch and
+        //    the whole block ran. When they differ the parent was switched
+        //    part way: by default the verifier cannot show the suffix ran and
+        //    refuses the block, and with the `fast-leader-handover` feature it
+        //    validates the switch and proves only the executed suffix.
         //
         //    The header is read from shred 0 alone, never from the whole
         //    first component: the rule that an UpdateParent may not name the
@@ -419,20 +485,27 @@ impl ThinClient {
         //    shred 0. The verifier therefore requires it there and treats a
         //    header that is not as no header at all.
         const NO_HEADER: Error = Error::InvalidComponent("block does not start with a header");
-        match block::parse_marker(&shreds.first_shred_data()?) {
-            Ok(Marker::Header { parent }) if parent == shreds.parent => {}
-            Ok(Marker::Header { .. }) => return Err(Error::UpdateParentBlock),
+        let header_parent = match block::parse_marker(&shreds.first_shred_data()?) {
+            Ok(Marker::Header { parent }) => parent,
             _ => return Err(NO_HEADER),
-        }
-        //    A parent id of all zeros cannot be told from an unset one, so
-        //    the verifier cannot establish the parent and refuses to prove
-        //    anything. Only a block built directly on a cluster's first block
-        //    has such a parent.
-        if shreds.parent.id == [0u8; 32] {
-            return Err(Error::ZeroParentId);
-        }
-        //    And the shreds themselves must agree with that parent.
-        shreds.check_parent_offset(block.slot)?;
+        };
+        //    `switch_start` is the shred where execution resumed after a
+        //    mid-block parent switch, when this is a switched block the
+        //    verifier accepts a suffix of; `None` for an ordinary block.
+        let switch_start = if header_parent == shreds.parent {
+            //    A parent id of all zeros cannot be told from an unset one, so
+            //    the verifier cannot establish the parent and refuses to prove
+            //    anything. Only a block built directly on a cluster's first
+            //    block has such a parent.
+            if shreds.parent.id == [0u8; 32] {
+                return Err(Error::ZeroParentId);
+            }
+            //    And the shreds themselves must agree with that parent.
+            shreds.check_parent_offset(block.slot)?;
+            None
+        } else {
+            verify_parent_switch(&shreds, &header_parent, block.slot, proof.component_start)?
+        };
 
         // 5. Parse the transaction's component from its true start.
         if proof.component_start == 0 {
@@ -441,13 +514,19 @@ impl ThinClient {
         let component = shreds.component(proof.component_start)?;
         let transaction = block::transaction_at(&component, proof.position)?;
 
-        // 6. Optionally, the footer.
+        // 6. Optionally, the footer. In a switched block only one in the
+        //    executed suffix is reported; one in the abandoned prefix never ran.
         let footer = match proof.footer_start {
             None => None,
-            Some(start) => match block::parse_marker(&shreds.component(start)?)? {
-                Marker::Footer(footer) => Some(*footer),
-                _ => return Err(Error::InvalidComponent("not a footer")),
-            },
+            Some(start) => {
+                if switch_start.is_some_and(|resumed| start < resumed) {
+                    return Err(Error::AbandonedPrefix);
+                }
+                match block::parse_marker(&shreds.component(start)?)? {
+                    Marker::Footer(footer) => Some(*footer),
+                    _ => return Err(Error::InvalidComponent("not a footer")),
+                }
+            }
         };
 
         Ok(VerifiedTransaction {

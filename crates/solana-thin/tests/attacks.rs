@@ -882,14 +882,22 @@ fn a_transaction_in_an_abandoned_block_prefix_is_not_included() {
         .component(&entry_batch(&[vec![]]))
         .build();
 
-    // An honest prover will not touch the block.
+    // Without fast leader handover an honest prover will not touch the block;
+    // with it, the prover indexes the block to prove its executed suffix, on
+    // the parent the block ended on.
+    #[cfg(not(feature = "fast-leader-handover"))]
     assert_eq!(
         BlockData::from_shreds(&payloads).unwrap_err(),
         Error::UpdateParentBlock
     );
+    #[cfg(feature = "fast-leader-handover")]
+    assert_eq!(
+        BlockData::from_shreds(&payloads).unwrap().parent(),
+        final_parent
+    );
 
-    // A dishonest one indexes it with the parent the block ended on, which is
-    // the parent its id commits to, and so the id validators certified.
+    // A dishonest prover indexes it with the parent the block ended on, which
+    // is the parent its id commits to, and so the id validators certified.
     let data = BlockData::from_shreds_with_final_parent(&payloads, final_parent).unwrap();
     let cert = w.validators.fast_cert(
         data.block(),
@@ -897,15 +905,32 @@ fn a_transaction_in_an_abandoned_block_prefix_is_not_included() {
         SHRED_VERSION,
     );
     assert!(w.client.verify_finality(&cert).is_ok());
+    let prove = |seed| prover::prove(cert.clone(), &[&data], &signature_for(seed), false).unwrap();
 
+    // Without the feature the verifier refuses the whole switched block,
+    // whichever part of it the claim names: the header names a parent the
+    // block id does not, and that is as far as it reads.
+    #[cfg(not(feature = "fast-leader-handover"))]
     for seed in [31337, 31338] {
-        let proof = prover::prove(cert.clone(), &[&data], &signature_for(seed), false).unwrap();
-        // Every Merkle path in this proof is valid. The header gives it away:
-        // it names a parent the block id does not.
         assert_eq!(
-            w.client.verify_transaction(&proof),
+            w.client.verify_transaction(&prove(seed)),
             Err(Error::UpdateParentBlock)
         );
+    }
+
+    // With the feature the abandoned-prefix transaction is still refused, and
+    // the executed-suffix one proves, reported on the parent the block ended on.
+    #[cfg(feature = "fast-leader-handover")]
+    {
+        assert_eq!(
+            w.client.verify_transaction(&prove(31337)),
+            Err(Error::AbandonedPrefix)
+        );
+        let verified = w.client.verify_transaction(&prove(31338)).unwrap();
+        assert_eq!(verified.block, data.block());
+        assert_eq!(verified.parent, final_parent);
+        assert_eq!(verified.component_start, 96);
+        assert!(verified.has_memo(b"executed"));
     }
 }
 
@@ -948,11 +973,17 @@ fn a_header_split_across_shreds_does_not_hide_an_abandoned_prefix() {
     second.body = untrimmed(&header[20..]);
     let payloads = builder.build();
 
-    // An honest prover finds no header where a validator would look.
+    // An honest prover finds no header where a validator would look. Without
+    // the feature it refuses the block for the switch it does see; with the
+    // feature it indexes the block, and the verifier below is what refuses it,
+    // for the header that is not wholly in shred 0.
+    #[cfg(not(feature = "fast-leader-handover"))]
     assert_eq!(
         BlockData::from_shreds(&payloads).unwrap_err(),
         Error::UpdateParentBlock
     );
+    #[cfg(feature = "fast-leader-handover")]
+    assert!(BlockData::from_shreds(&payloads).is_ok());
 
     let data = BlockData::from_shreds_with_final_parent(&payloads, parent).unwrap();
     let cert = w.validators.fast_cert(
@@ -990,6 +1021,287 @@ fn a_header_split_across_shreds_does_not_hide_an_abandoned_prefix() {
         Err(Error::InvalidComponent(
             "block does not start with a header"
         ))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fast leader handover (feature `fast-leader-handover`)
+// ---------------------------------------------------------------------------
+//
+// With the feature on, the verifier proves a transaction in the executed
+// suffix of a block that switched parent mid-way, and keeps refusing the
+// abandoned prefix. These tests build each shape that must be refused and the
+// one that must be accepted. The differential oracle (`tools/agave-fixtures`)
+// is the real acceptance gate; these pin the behavior with no Agave in the
+// build.
+
+/// The whole point of the feature: a transaction after the `UpdateParent`
+/// marker proves, on the parent the block ended on, and one before it does not.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_transaction_in_the_executed_suffix_proves() {
+    let w = world();
+    let header_parent = w.blocks[2].block(); // H, slot 1003
+    let final_parent = w.blocks[1].block(); // P, slot 1002
+    let prefix = vec![vec![vec![legacy_transaction(1, &[b"doomed"])]]];
+    let suffix = vec![vec![vec![
+        legacy_transaction(2, &[b"kept-a"]),
+        legacy_transaction(3, &[b"kept-b"]),
+    ]]];
+    // slot 1004 is first in its leader window (1004 % 4 == 0).
+    let block = update_parent_block(
+        1004,
+        header_parent,
+        final_parent,
+        SHRED_VERSION,
+        &prefix,
+        &suffix,
+        None,
+    );
+    assert_eq!(block.parent(), final_parent);
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+
+    // Every executed-suffix transaction proves, with its footer, on P.
+    for (seed, memo) in [(2u64, &b"kept-a"[..]), (3, &b"kept-b"[..])] {
+        let proof = prover::prove(cert.clone(), &[&block], &signature_for(seed), true).unwrap();
+        let verified = w.client.verify_transaction(&proof).unwrap();
+        assert_eq!(verified.block, block.block());
+        assert_eq!(verified.parent, final_parent);
+        assert_eq!(verified.component_start, 96);
+        assert!(verified.has_memo(memo));
+        // The footer that rode along is the one in the executed suffix.
+        assert!(verified.footer.is_some());
+    }
+
+    // The abandoned-prefix transaction, proved over the same block, is refused.
+    let prefix_proof = prover::prove(cert.clone(), &[&block], &signature_for(1), false).unwrap();
+    assert_eq!(
+        w.client.verify_transaction(&prefix_proof),
+        Err(Error::AbandonedPrefix)
+    );
+
+    // And a prefix claim that also opens the marker, to pass the switch check
+    // only to be caught at the component, is refused all the same.
+    let needed: BTreeSet<u32> = [0, 31, 32, 63, 64].into_iter().collect();
+    let prefix_claim = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: block.open(&needed),
+        component_start: 32,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(
+        w.client.verify_transaction(&prefix_claim),
+        Err(Error::AbandonedPrefix)
+    );
+}
+
+/// A small switch block and a certificate for it, for the refusal tests. The
+/// suffix transaction has signature `signature_for(2)`.
+#[cfg(feature = "fast-leader-handover")]
+fn switched_in(
+    w: &World,
+    slot: u64,
+    header_parent: BlockRef,
+    final_parent: BlockRef,
+) -> (BlockData, FinalityCert) {
+    let prefix = vec![vec![vec![legacy_transaction(1, &[b"doomed"])]]];
+    let suffix = vec![vec![vec![legacy_transaction(2, &[b"kept"])]]];
+    let block = update_parent_block(
+        slot,
+        header_parent,
+        final_parent,
+        SHRED_VERSION,
+        &prefix,
+        &suffix,
+        None,
+    );
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    (block, cert)
+}
+
+/// A suffix proof, whichever shape the block is.
+#[cfg(feature = "fast-leader-handover")]
+fn suffix_proof(block: &BlockData, cert: &FinalityCert) -> TxProof {
+    prover::prove(cert.clone(), &[block], &signature_for(2), false).unwrap()
+}
+
+/// A switch is legal only in the first slot of a leader window, so a verifier
+/// refuses one whose slot is not a multiple of four.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_switch_outside_the_first_slot_of_a_window_is_refused() {
+    let w = world();
+    // 1005 % 4 == 1: not the first slot of a window.
+    let (block, cert) = switched_in(&w, 1005, w.blocks[2].block(), w.blocks[1].block());
+    assert_eq!(
+        w.client.verify_transaction(&suffix_proof(&block, &cert)),
+        Err(Error::UpdateParentBlock)
+    );
+}
+
+/// The parent the block commits to must be a real block: a switch onto a
+/// zero (genesis) id cannot be told from no switch at all, so it is refused.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_switch_onto_a_zero_parent_id_is_refused() {
+    let w = world();
+    let genesis = BlockRef {
+        slot: 0,
+        id: [0; 32],
+    };
+    let (block, cert) = switched_in(&w, 1004, w.blocks[2].block(), genesis);
+    // The honest prover will not even build a proof for a zero-parent block.
+    assert_eq!(
+        prover::prove(cert.clone(), &[&block], &signature_for(2), false).unwrap_err(),
+        Error::ZeroParentId
+    );
+    // A dishonest prover that opens the suffix and the marker anyway is still
+    // refused: the switch onto a zero parent cannot be told from none.
+    let needed: BTreeSet<u32> = [0, 63, 64, 95, 96].into_iter().collect();
+    let proof = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: block.open(&needed),
+        component_start: 96,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(
+        w.client.verify_transaction(&proof),
+        Err(Error::ZeroParentId)
+    );
+}
+
+/// A switch may only move replay to an older parent: one naming a newer slot
+/// than the header's parent is refused.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_switch_to_a_newer_parent_slot_is_refused() {
+    let w = world();
+    // Header on slot 1002, marker to slot 1003: forward, not back.
+    let (block, cert) = switched_in(&w, 1004, w.blocks[1].block(), w.blocks[2].block());
+    assert_eq!(
+        w.client.verify_transaction(&suffix_proof(&block, &cert)),
+        Err(Error::UpdateParentBlock)
+    );
+}
+
+/// The opened marker must name the parent the block's id commits to. A block
+/// whose marker names a third parent is not the block the certificate is for.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_marker_that_names_another_parent_is_refused() {
+    let w = world();
+    let header_parent = w.blocks[2].block();
+    let marker_names = w.blocks[0].block(); // slot 1000
+    let committed = w.blocks[1].block(); // slot 1002, what the id commits to
+    let payloads = BlockBuilder::new(1004, header_parent, SHRED_VERSION)
+        .header()
+        .component(&entry_batch(&[vec![legacy_transaction(1, &[b"doomed"])]]))
+        .component(&update_parent_component(&marker_names))
+        .component(&entry_batch(&[vec![legacy_transaction(2, &[b"kept"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]))
+        .build();
+    let block = BlockData::from_shreds_with_final_parent(&payloads, committed).unwrap();
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+    assert_eq!(
+        w.client.verify_transaction(&suffix_proof(&block, &cert)),
+        Err(Error::UpdateParentBlock)
+    );
+}
+
+/// A suffix proof that does not open the marker cannot establish the switch,
+/// so the verifier cannot tell the suffix from an abandoned prefix and refuses.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_switch_proof_without_the_marker_is_refused() {
+    let w = world();
+    let (block, cert) = switched_in(&w, 1004, w.blocks[2].block(), w.blocks[1].block());
+    // The suffix component (96) and the shred before it, but not the marker (64).
+    let needed: BTreeSet<u32> = [0, 95, 96].into_iter().collect();
+    let proof = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: block.open(&needed),
+        component_start: 96,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: None,
+    };
+    assert_eq!(
+        w.client.verify_transaction(&proof),
+        Err(Error::UpdateParentBlock)
+    );
+}
+
+/// A footer in the abandoned prefix never ran; a suffix proof that points its
+/// footer at one is refused, even though the transaction itself is in the suffix.
+#[cfg(feature = "fast-leader-handover")]
+#[test]
+fn a_footer_in_the_abandoned_prefix_is_refused() {
+    let w = world();
+    let header_parent = w.blocks[2].block();
+    let final_parent = w.blocks[1].block();
+    let payloads = BlockBuilder::new(1004, header_parent, SHRED_VERSION)
+        .header() // component 0
+        .component(&entry_batch(&[vec![legacy_transaction(1, &[b"doomed"])]])) // 32
+        .component(&footer_component([0xde; 32], 7, b"decoy", None)) // 64, decoy footer
+        .component(&update_parent_component(&final_parent)) // 96, marker (u = 96)
+        .component(&entry_batch(&[vec![legacy_transaction(2, &[b"kept"])]])) // 128
+        .component(&footer_component([0; 32], 1, b"", None)) // 160, real footer
+        .component(&entry_batch(&[vec![]])) // 192, tick
+        .build();
+    let block = BlockData::from_shreds_with_final_parent(&payloads, final_parent).unwrap();
+    let cert = w.validators.fast_cert(
+        block.block(),
+        &w.validators.ranks_reaching(8_000),
+        SHRED_VERSION,
+    );
+
+    // The suffix transaction alone proves, carrying the real (suffix) footer.
+    let honest = prover::prove(cert.clone(), &[&block], &signature_for(2), true).unwrap();
+    let verified = w.client.verify_transaction(&honest).unwrap();
+    assert_eq!(verified.footer.as_ref().unwrap().bank_hash, [0; 32]);
+
+    // Point the same suffix claim at the decoy footer in the prefix: refused.
+    let needed: BTreeSet<u32> = [0, 63, 64, 95, 96, 127, 128].into_iter().collect();
+    let decoy = TxProof {
+        finality: cert,
+        ancestry: vec![],
+        block: block.open(&needed),
+        component_start: 128,
+        position: TxPosition {
+            entry: 0,
+            transaction: 0,
+        },
+        footer_start: Some(64),
+    };
+    assert_eq!(
+        w.client.verify_transaction(&decoy),
+        Err(Error::AbandonedPrefix)
     );
 }
 

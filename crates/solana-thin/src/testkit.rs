@@ -515,6 +515,44 @@ pub fn simple_block(
     BlockData::from_shreds(&payloads).expect("builder output is a valid block")
 }
 
+/// A block that switches parent mid-way under fast leader handover.
+///
+/// It holds a header naming `header_parent`, the `prefix` batches, an
+/// `UpdateParent` marker to `final_parent` at the next FEC boundary, the
+/// `suffix` batches, a footer and the alpentick. Its id commits to
+/// `final_parent` — the parent replay ends on — while every shred keeps the
+/// header's parent offset, exactly as a real switched block's shreds do. A
+/// default verifier refuses it; one built with `fast-leader-handover` proves a
+/// transaction in the suffix and refuses one in the prefix.
+pub fn update_parent_block(
+    slot: u64,
+    header_parent: BlockRef,
+    final_parent: BlockRef,
+    shred_version: u16,
+    prefix: &[Vec<Vec<Vec<u8>>>],
+    suffix: &[Vec<Vec<Vec<u8>>>],
+    footer_cert: Option<&FinalityCert>,
+) -> BlockData {
+    let mut builder = BlockBuilder::new(slot, header_parent, shred_version).header();
+    for batch in prefix {
+        builder = builder.component(&entry_batch(batch));
+    }
+    builder = builder.component(&update_parent_component(&final_parent));
+    for batch in suffix {
+        builder = builder.component(&entry_batch(batch));
+    }
+    let footer = footer_component(
+        merkle::sha256(&[b"testkit-bank", &slot.to_le_bytes()]),
+        1_792_590_840_000_000_000 + slot * 400_000_000,
+        b"testkit",
+        footer_cert,
+    );
+    let tick = entry_batch(&[vec![]]);
+    let payloads = builder.component(&footer).component(&tick).build();
+    BlockData::from_shreds_with_final_parent(&payloads, final_parent)
+        .expect("builder output is a valid switched block")
+}
+
 /// A ready-made validator set, block and proof, for documentation examples.
 pub struct DemoWorld {
     /// Hash of `set`.

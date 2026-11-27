@@ -247,15 +247,14 @@ impl<'a> VerifiedShreds<'a> {
         Ok(data)
     }
 
-    /// Checks that every opened shred names the block's parent slot.
+    /// Checks that every opened shred names parent slot `parent_slot`.
     ///
     /// Each data shred carries how many slots back its parent is. A
     /// validator kills a slot whose header names a different parent slot
     /// than its shreds do, and never completes one whose shreds disagree
-    /// with each other. For a block that did not switch parent, that makes
-    /// every shred's offset the distance to the parent in the block's tree.
-    pub(crate) fn check_parent_offset(&self, slot: u64) -> Result<()> {
-        let expected = slot.checked_sub(self.parent.slot);
+    /// with each other, so a finalized block's shreds all name one slot.
+    fn offsets_name(&self, slot: u64, parent_slot: u64) -> Result<()> {
+        let expected = slot.checked_sub(parent_slot);
         for shred in self.shreds.values() {
             if Some(u64::from(shred.parent_offset)) != expected {
                 return Err(Error::InvalidShred(
@@ -264,6 +263,69 @@ impl<'a> VerifiedShreds<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Checks that every opened shred names the parent the block's tree
+    /// commits to. For a block that did not switch parent, that parent slot
+    /// is the distance every shred's offset records.
+    pub(crate) fn check_parent_offset(&self, slot: u64) -> Result<()> {
+        self.offsets_name(slot, self.parent.slot)
+    }
+
+    /// Checks that every opened shred names the header's parent `header_parent`.
+    ///
+    /// A block that switched parent keeps the shred headers it was first shred
+    /// with: every shred still records the distance to the *header's* parent,
+    /// not to the parent an `UpdateParent` marker moved replay onto. (Confirmed
+    /// against Agave: the shred parent offset is one slot-wide value, checked
+    /// equal to the block header's parent and `>=` the marker's.)
+    #[cfg(feature = "fast-leader-handover")]
+    pub(crate) fn check_parent_offset_switched(
+        &self,
+        slot: u64,
+        header_parent: &BlockRef,
+    ) -> Result<()> {
+        self.offsets_name(slot, header_parent.slot)
+    }
+
+    /// The one opened `UpdateParent` marker: its component start `u` (a FEC-set
+    /// boundary) and the parent it names. An error if the opened shreds show
+    /// no such marker, or more than one.
+    ///
+    /// Only the opened shreds are scanned; `component` already enforces that a
+    /// start is a FEC-set boundary whose previous shred is `DATA_COMPLETE`.
+    /// "At most one marker in the whole block" is relied on from finality, as
+    /// with other rules a certificate already enforces: a block Agave marked
+    /// dead for a second marker (`MultipleUpdateParents`) has no certificate to
+    /// reach this check.
+    #[cfg(feature = "fast-leader-handover")]
+    pub(crate) fn single_opened_update_parent(&self) -> Result<(u32, BlockRef)> {
+        use crate::block::Marker;
+        let per_set = DATA_SHREDS_PER_FEC_SET as u32;
+        let mut found: Option<(u32, BlockRef)> = None;
+        for &index in self.shreds.keys() {
+            if index % per_set != 0 {
+                continue;
+            }
+            // Skip a boundary whose previous shred is not opened and
+            // `DATA_COMPLETE`; `component` would refuse it anyway.
+            if index > 0
+                && !self
+                    .get(index - 1)
+                    .map(|s| s.data_complete())
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            let data = self.component(index)?;
+            if let Ok(Marker::UpdateParent { parent }) = crate::block::parse_marker(&data) {
+                if found.is_some() {
+                    return Err(Error::UpdateParentBlock);
+                }
+                found = Some((index, parent));
+            }
+        }
+        found.ok_or(Error::UpdateParentBlock)
     }
 
     /// The bytes of the component that starts at shred `start`, as far as the
