@@ -1153,6 +1153,19 @@ fn a_switch_outside_the_first_slot_of_a_window_is_refused() {
         w.client.verify_transaction(&suffix_proof(&block, &cert)),
         Err(Error::UpdateParentBlock)
     );
+    // Nor does the honest prover index such a block, which Agave refuses to
+    // keep (`UpdateParentNotFirstInLeaderWindow`).
+    let payloads = BlockBuilder::new(1005, w.blocks[2].block(), SHRED_VERSION)
+        .header()
+        .component(&update_parent_component(&w.blocks[1].block()))
+        .component(&entry_batch(&[vec![legacy_transaction(2, &[b"x"])]]))
+        .component(&footer_component([0; 32], 1, b"", None))
+        .component(&entry_batch(&[vec![]]))
+        .build();
+    assert_eq!(
+        BlockData::from_shreds(&payloads).unwrap_err(),
+        Error::UpdateParentBlock
+    );
 }
 
 /// The parent the block commits to must be a real block: a switch onto a

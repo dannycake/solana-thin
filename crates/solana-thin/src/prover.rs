@@ -129,7 +129,7 @@ impl BlockData {
                 }
             })
             .collect();
-        let (parent, switch) = resolve_parent(header_parent, &markers, final_parent)?;
+        let (parent, switch) = resolve_parent(slot, header_parent, &markers, final_parent)?;
 
         let tree = block_tree(&fec_roots, &parent);
         Ok(Self {
@@ -291,6 +291,7 @@ impl BlockData {
 /// dishonest prover (`final_parent`) takes the given parent on faith and still
 /// records the single marker so a suffix proof can open it.
 fn resolve_parent(
+    slot: u64,
     header_parent: Option<BlockRef>,
     markers: &[(u32, BlockRef)],
     final_parent: Option<BlockRef>,
@@ -304,20 +305,25 @@ fn resolve_parent(
             1 => {
                 #[cfg(feature = "fast-leader-handover")]
                 {
-                    // Agave keeps a marker only if it names another block than
-                    // the header does, at or before the header's parent slot.
-                    // A block that breaks either is never finalized, and the
-                    // verifier, seeing the tree and header agree, would read
-                    // the whole of it as having run.
+                    // Agave keeps a marker only in the first slot of a leader's
+                    // window, and only if it names another block than the
+                    // header does, at or before the header's parent slot. A
+                    // block that breaks any of these is never finalized; for
+                    // the second, the verifier, seeing the tree and header
+                    // agree, would read the whole of it as having run.
                     let header = header_parent.ok_or_else(no_header)?;
                     let (start, parent) = markers[0];
-                    if parent == header || parent.slot > header.slot {
+                    if slot % crate::client::NUM_CONSECUTIVE_LEADER_SLOTS != 0
+                        || parent == header
+                        || parent.slot > header.slot
+                    {
                         return Err(Error::UpdateParentBlock);
                     }
                     Ok((parent, Some(start)))
                 }
                 #[cfg(not(feature = "fast-leader-handover"))]
                 {
+                    let _ = slot;
                     Err(Error::UpdateParentBlock)
                 }
             }

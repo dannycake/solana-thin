@@ -139,7 +139,7 @@ fn warmup_end(slots_per_epoch: u64) -> Option<(u64, u64)> {
 /// `solana-leader-schedule`). A parent switch is legal only in the first slot
 /// of a window, so a switched block's slot is a multiple of this.
 #[cfg(feature = "fast-leader-handover")]
-const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
+pub(crate) const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 
 /// Validates a block whose shred-0 header names a different parent than the
 /// tree commits to: a mid-block parent switch under fast leader handover.
