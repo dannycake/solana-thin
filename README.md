@@ -534,17 +534,18 @@ software around that.
    ([docs/PROVER.md](docs/PROVER.md)): it finds a block's certificate, fetches
    the block from validators by its certified id, and serves
    `GET /proof/<signature>`, a mainnet block in a median four seconds at a
-   polite request rate. What is missing is operation: provers run by several
-   parties so that a client can ask more than one, a soak longer than an
-   afternoon, an epoch boundary crossed live with both sets, and a way to
-   keep proofs for longer than validators keep blocks, which today means
-   asking while the block is hours old.
+   polite request rate, and it has crossed an epoch boundary live with both
+   sets pinned. What is missing is operation: provers run by several parties
+   so that a client can ask more than one, a soak longer than an afternoon,
+   and a way to keep proofs for longer than validators keep blocks, which
+   today means asking while the block is hours old.
 3. **Bindings that ship.** The WebAssembly module is on npm as `solana-thin`
    and the Swift binding is a Swift package; these, the Kotlin/Android binding
    and the iPhone all verify a mainnet proof on their platforms
-   ([docs/BINDINGS.md](docs/BINDINGS.md)), Android on an emulator. Still to do:
-   compile and test the Swift side in CI rather than by hand on a Mac, and a
-   run on physical Android hardware. The Android binding is built from source,
+   ([docs/BINDINGS.md](docs/BINDINGS.md)), Android on an emulator. A macOS CI
+   job builds the XCFramework and runs the Swift tests, on demand only: run on
+   every push, it sat queued for a macOS runner that never picked it up. Still to do: a run on
+   physical Android hardware. The Android binding is built from source,
    not published to Maven.
 4. **Review by someone who works on a validator**, and the open items in
    [docs/NOTES.md](docs/NOTES.md).
