@@ -13,7 +13,7 @@ name = "solana_thin_wasm"
 crate-type = ["cdylib"]
 
 [dependencies]
-solana-thin = { path = "../solana-thin", version = "0.1.0" }
+solana-thin = { path = "../solana-thin", version = "0.2.0" }
 
 [dev-dependencies]
 serde_json = "1"

@@ -1,6 +1,6 @@
 {
   "name": "solana-thin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The solana-thin verifier as a bare WebAssembly module with a small, dependency-free JavaScript wrapper: check that a transaction is in a finalized Solana block, from a small proof.",
   "type": "module",
   "main": "./solana-thin.mjs",

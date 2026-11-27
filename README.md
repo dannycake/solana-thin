@@ -51,7 +51,7 @@ reviewed it.
 - **Swift** (iOS and macOS) — add this repository as a package:
 
   ```swift
-  .package(url: "https://github.com/dannycake/solana-thin.git", from: "0.1.0")
+  .package(url: "https://github.com/dannycake/solana-thin.git", from: "0.2.0")
   ```
 
 - **Kotlin / Android** — built from source; see [docs/BINDINGS.md](docs/BINDINGS.md).

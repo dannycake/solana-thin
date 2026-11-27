@@ -32,7 +32,7 @@ hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { version = "0.10", default-features = false }
-solana-thin = { path = "../solana-thin", version = "0.1.0", optional = true }
+solana-thin = { path = "../solana-thin", version = "0.2.0", optional = true }
 bs58 = { version = "0.5", optional = true }
 # For `setlog keygen` only. Asked for directly: through ed25519-compact it
 # comes with its browser backend and a dozen crates behind that.

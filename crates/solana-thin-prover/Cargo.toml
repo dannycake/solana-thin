@@ -19,9 +19,9 @@ all-features = true
 fast-leader-handover = ["solana-thin/fast-leader-handover"]
 
 [dependencies]
-solana-thin = { path = "../solana-thin", version = "0.1.0" }
+solana-thin = { path = "../solana-thin", version = "0.2.0" }
 # For set files and logs, and for its JSON-RPC client.
-solana-thin-setlog = { path = "../solana-thin-setlog", version = "0.1.0", features = ["rpc"] }
+solana-thin-setlog = { path = "../solana-thin-setlog", version = "0.2.0", features = ["rpc"] }
 # Signs repair requests with a key made at start and never stored. Already
 # in the tree for the set log, pure Rust, no dependencies of its own.
 ed25519-compact = { version = "2.6", default-features = false, features = ["std"] }
