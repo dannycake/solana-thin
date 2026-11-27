@@ -45,7 +45,10 @@ agave-logger = { path = "../agave/logger" }
 # Parity for the oracle's coding shreds: the codec and version Agave's
 # shredder uses (its own handle on it, `ReedSolomonCache::get`, is private).
 reed-solomon-erasure = "6.0.0"
-solana-thin = { path = "../../crates/solana-thin", features = ["testkit"] }
+solana-thin = { path = "../../crates/solana-thin", features = [
+    "testkit",
+    "fast-leader-handover",
+] }
 solana-bls-signatures = "*"
 solana-signer-store = "*"
 solana-hash = "*"

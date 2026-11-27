@@ -2090,6 +2090,15 @@ pub struct Candidate {
 /// real component boundaries: the verifier is the one that has to refuse a
 /// start that follows no `DATA_COMPLETE`.
 pub fn enumerate(raw: &RawBlock) -> Vec<Candidate> {
+    // The UpdateParent marker's FEC set, if the block switched parent. A suffix
+    // claim opens it so the verifier can derive the switch, exactly as the
+    // honest prover does; a prefix claim that opens it is still refused.
+    let marker = raw.component_starts().into_iter().find(|&start| {
+        matches!(
+            block::parse_marker(&raw.component(start).0),
+            Ok(Marker::UpdateParent { .. })
+        )
+    });
     let mut out = Vec::new();
     for start in 0..raw.shred_count() {
         let (bytes, last) = raw.component(start);
@@ -2113,6 +2122,12 @@ pub fn enumerate(raw: &RawBlock) -> Vec<Candidate> {
                 needed.insert(start - 1);
             }
             needed.extend(start..=holder);
+            if let Some(u) = marker {
+                if u > 0 {
+                    needed.insert(u - 1);
+                }
+                needed.insert(u);
+            }
             out.push(Candidate {
                 component_start: start,
                 position,

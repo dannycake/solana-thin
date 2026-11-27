@@ -323,6 +323,14 @@ impl Vector {
             return violations;
         };
         let everything: BTreeSet<u32> = (0..raw.shred_count()).collect();
+        // The UpdateParent marker's FEC set, if the block switched parent, so a
+        // suffix claim opens it as the honest prover does.
+        let marker = raw.component_starts().into_iter().find(|&start| {
+            matches!(
+                block::parse_marker(&raw.component(start).0),
+                Ok(Marker::UpdateParent { .. })
+            )
+        });
         let mut accepted: Option<(u32, TxPosition, BTreeSet<u32>)> = None;
         for start in 0..raw.shred_count() {
             let (bytes, last) = raw.component(start);
@@ -346,6 +354,12 @@ impl Vector {
                     needed.insert(start - 1);
                 }
                 needed.extend(start..=holder);
+                if let Some(u) = marker {
+                    if u > 0 {
+                        needed.insert(u - 1);
+                    }
+                    needed.insert(u);
+                }
                 for opened in [&needed, &everything] {
                     let proof = TxProof {
                         finality: certificate.clone(),
