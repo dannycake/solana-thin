@@ -22,6 +22,13 @@ follows [Semantic Versioning](https://semver.org/) with the pre-1.0 caveat in
   which shreds the proof opens.
 - `prover serve` sends `Access-Control-Allow-Origin: *` with every answer, so
   a page on any origin can read it.
+- `fast-leader-handover` feature (default off) on `solana-thin` and
+  `solana-thin-prover`: prove a transaction in the executed suffix of a block
+  whose leader switched parent part way, and refuse one in the abandoned
+  prefix with the new `Error::AbandonedPrefix`. A default build refuses every
+  such block, as before. With the feature, the prover refuses a block whose
+  `UpdateParent` names the header's own block or a later slot than the
+  header's parent, as Agave's blockstore does.
 
 ## [0.1.0]
 

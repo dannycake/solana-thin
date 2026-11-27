@@ -405,7 +405,7 @@ Cargo features, all off by default:
 | `no-threads` | `blst` checks signatures on the calling thread. Without it, `blst` starts a thread pool the first time a signature is checked. Turn it on for a phone or an embedded host. Targets without threads, such as `wasm32-unknown-unknown`, get it without asking. |
 | `portable` | `blst` chooses its instructions when it runs, not when it is built. Without it, an x86-64 build uses ADX if the build machine has it and stops with an illegal instruction on a CPU that does not. Turn it on for a binary built on one machine and run on another. |
 | `testkit` | Deterministic block and validator builders for tests and examples. |
-| `fast-leader-handover` | Prove a transaction in the executed suffix of a block that switched parent mid-way, and keep refusing the abandoned prefix. Off until a cluster activates fast leader handover; a default build refuses every such block and is byte-for-byte unchanged. |
+| `fast-leader-handover` | Prove a transaction in the executed suffix of a block that switched parent mid-way, and keep refusing the abandoned prefix. Off until a cluster activates fast leader handover; a default build refuses every such block and is byte-for-byte unchanged. `solana-thin-prover` has the same feature, which turns this one on and lets the prover serve such blocks. |
 
 From Kotlin, Swift or JavaScript: [docs/BINDINGS.md](docs/BINDINGS.md). A
 `Verifier` object takes a validator set and its pinned hash for an epoch,

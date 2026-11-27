@@ -278,7 +278,17 @@ fn resolve_parent(
             1 => {
                 #[cfg(feature = "fast-leader-handover")]
                 {
-                    Ok((markers[0].1, Some(markers[0].0)))
+                    // Agave keeps a marker only if it names another block than
+                    // the header does, at or before the header's parent slot.
+                    // A block that breaks either is never finalized, and the
+                    // verifier, seeing the tree and header agree, would read
+                    // the whole of it as having run.
+                    let header = header_parent.ok_or_else(no_header)?;
+                    let (start, parent) = markers[0];
+                    if parent == header || parent.slot > header.slot {
+                        return Err(Error::UpdateParentBlock);
+                    }
+                    Ok((parent, Some(start)))
                 }
                 #[cfg(not(feature = "fast-leader-handover"))]
                 {

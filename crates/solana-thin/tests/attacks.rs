@@ -973,17 +973,20 @@ fn a_header_split_across_shreds_does_not_hide_an_abandoned_prefix() {
     second.body = untrimmed(&header[20..]);
     let payloads = builder.build();
 
-    // An honest prover finds no header where a validator would look. Without
-    // the feature it refuses the block for the switch it does see; with the
-    // feature it indexes the block, and the verifier below is what refuses it,
-    // for the header that is not wholly in shred 0.
+    // An honest prover finds no header where a validator would look, and
+    // refuses the block: without the feature for the switch it does see, with
+    // it for the missing header the switch must be checked against. Only a
+    // dishonest prover gets further, and the verifier below refuses it.
     #[cfg(not(feature = "fast-leader-handover"))]
     assert_eq!(
         BlockData::from_shreds(&payloads).unwrap_err(),
         Error::UpdateParentBlock
     );
     #[cfg(feature = "fast-leader-handover")]
-    assert!(BlockData::from_shreds(&payloads).is_ok());
+    assert_eq!(
+        BlockData::from_shreds(&payloads).unwrap_err(),
+        Error::InvalidComponent("block does not start with a header")
+    );
 
     let data = BlockData::from_shreds_with_final_parent(&payloads, parent).unwrap();
     let cert = w.validators.fast_cert(
