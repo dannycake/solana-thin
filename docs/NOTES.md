@@ -608,10 +608,11 @@ the same as none existing.
    The one code path not yet run on real data is the shared-key rank map,
    which no mainnet epoch seen so far has needed.
 2. **Run the prover for longer than an afternoon.** It is built
-   (`docs/PROVER.md`) and was measured on 20 fresh mainnet blocks. Still to
-   see live: an epoch boundary with both sets, slow certificates, old
-   blocks near the end of what validators keep, and a day of steady
-   requests.
+   (`docs/PROVER.md`), measured on 20 fresh mainnet blocks and across the
+   1097-to-1098 epoch boundary, where both epochs' sets and the boundary's
+   slow certificates verified (64 of 64 blocks, before and after). Still to
+   see live: old blocks near the end of what validators keep, and a day of
+   steady requests rather than an afternoon's.
 3. **Outside review.** Post to the Solana developer forum and ask Anza or
    Firedancer engineers to check the certificate and block id handling. The
    three protocol asks in `DESIGN.md` are a natural thread.

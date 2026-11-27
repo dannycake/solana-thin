@@ -188,6 +188,18 @@ process with an empty store and the hint from the RPC node: 5.2 to 7.5
 seconds from start to a proof on disk, 5.4 to 32.3 KB, each then verified by
 `verify_proof` in a process of its own.
 
+**Across an epoch boundary** (epoch 1097 to 1098, boundary slot 474,336,000,
+on 2026-11-26), with both sets pinned: of 30 blocks before the boundary and 34
+after, all 64 were served by `prover serve` and verified in a separate process
+against one set at a time — the blocks of 1097 under its set, those of 1098
+under the next. The boundary's first certificates are slow: two slots were
+finalized by a 60% + 60% certificate before fast finality resumed, and both
+verified. With only epoch 1098's set pinned, the last blocks of 1097 still
+verify, because a slow certificate in the first slot of 1098 finalizes them and
+the ancestry links back two to six hops; with only 1097's set, the first blocks
+of 1098 are refused with "no validator set pinned for epoch 1098", which names
+the set to fetch.
+
 **A local validator** (`solana-test-validator --alpenglow`, Agave 4.4.1): 24
 memo transfers in 24 blocks, each asked of `prover serve` over HTTP and
 verified in a separate process holding the proof, the set file and nothing
