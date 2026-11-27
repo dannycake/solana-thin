@@ -184,9 +184,13 @@ gap that is not zero is 131,854 lamports.
   an hour from a public endpoint, and it has to be done in the same epoch.
 
 None of the three is a proof. A set hash should rest on independent sources
-that agree, until the set is on chain under the bank hash (SIMD-0676, open),
-and a light client would then still need a way to open one account against
-that hash, which nothing specifies today.
+that agree. Putting the set on chain under the bank hash (SIMD-0676, open)
+does not fix this for a light client: since SIMD-0215 the bank hash commits
+account state with the accounts lattice hash, a homomorphic sum with no
+single-account inclusion proof, so no account can be opened against the bank
+hash the client holds. The route that works is a commitment in a block footer,
+which the certificate already covers; see [What Solana could add](#what-solana-could-add)
+and [proposals/validator-set-commitment.md](proposals/validator-set-commitment.md).
 
 The first two are read by tools in this repository (`snapshot-stakes` and
 `setlog from-rank-map`). `setlog` refuses on any difference between sources
@@ -386,14 +390,18 @@ it is not done. This crate cannot do better than the tree it verifies.
 
 Three small changes would remove the largest limits. As of November 2026:
 SIMD-0676 (open) would put the next epoch's stake, keys and ranks in an
-account under the bank hash, without a way to open one account against that
-hash; two open Agave pull requests would serve footer certificates and block
-markers over RPC; SIMD-0064's receipts are stagnant.
+account under the bank hash, but a light client could not open one account
+against it — since SIMD-0215 the bank hash commits account state with the
+accounts lattice hash, a homomorphic sum with no inclusion proof; two open
+Agave pull requests would serve footer certificates and block markers over
+RPC; SIMD-0064's receipts are stagnant.
 
 1. **A validator-set commitment.** Put the hash of epoch `E + 1`'s ranked
    `(BLS key, stake)` list in a block footer during epoch `E`. Footers are
    already covered by the block id, so a light client could follow epochs with
-   one small proof each and the pinned hash would be needed only once.
+   one small proof each and the pinned hash would be needed only once. This is
+   the light-client-openable form SIMD-0676 is missing; the full case is in
+   [proposals/validator-set-commitment.md](proposals/validator-set-commitment.md).
 2. **A receipts root.** A per-block Merkle root over transaction status, as
    SIMD-0064 described, committed in the footer. Inclusion proofs would then
    say whether a transaction succeeded.

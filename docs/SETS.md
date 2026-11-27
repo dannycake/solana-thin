@@ -281,5 +281,9 @@ So a log moves trust; it does not remove it. In place of "whoever handed me
 this hash", a client trusts that `threshold` of a known list of signers each
 did the reading honestly and did not all ask the same liar. That is a real
 improvement and it is all it is. The protocol could end the need for it with
-one hash of the next epoch's ranked validators in a block footer
+one hash of the next epoch's ranked validators in a block footer, which the
+certificate already covers. Putting the set in an account instead (SIMD-0676)
+would not reach a light client: the bank hash commits state with the accounts
+lattice hash (SIMD-0215), a homomorphic sum with no inclusion proof. The case
+is in [proposals/validator-set-commitment.md](proposals/validator-set-commitment.md)
 ([DESIGN.md](DESIGN.md#what-solana-could-add)).
