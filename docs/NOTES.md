@@ -532,8 +532,13 @@ shared ones.
 
 1. **Other places where the verifier reads a block differently from the rule
    it mirrors.** The header-in-shred-0 rule was one such place, and it was not
-   found by any test written beforehand. Firedancer was read only for the
-   header rule, and never run.
+   found by any test written beforehand. The `UpdateParent` marker was a
+   second, of the same kind: a validator reads it from one shred, and the
+   verifier read it from the whole component, so a marker split across two
+   shreds was a switch point to the verifier and none to a validator. An
+   independent review of the handover code found it, with the differential
+   oracle extended to show it against Agave. Firedancer was read only for
+   the header rule, and never run.
 2. **What blocks look like once fast leader handover is active.** Its
    feature has no account on mainnet, testnet or devnet, and none of 805
    captured blocks switched parent. The rules for such blocks are tested on

@@ -26,9 +26,14 @@ follows [Semantic Versioning](https://semver.org/) with the pre-1.0 caveat in
   `solana-thin-prover`: prove a transaction in the executed suffix of a block
   whose leader switched parent part way, and refuse one in the abandoned
   prefix with the new `Error::AbandonedPrefix`. A default build refuses every
-  such block, as before. With the feature, the prover refuses a block whose
-  `UpdateParent` names the header's own block or a later slot than the
-  header's parent, as Agave's blockstore does.
+  such block, as before. The verifier and the prover read an `UpdateParent`
+  marker from the data of its own shred, as a validator's blockstore does,
+  and the prover refuses blocks that blockstore would not keep: a marker
+  naming the header's
+  own block or a later slot than the header's parent, or a switch outside
+  the first slot of a leader's window. In a switched block the prover proves
+  the copy of a transaction that ran, and lists only the transactions that
+  ran.
 
 ## [0.1.0]
 
