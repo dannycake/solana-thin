@@ -541,7 +541,11 @@ shared ones.
    through Agave's own code, never on one a real cluster produced.
 3. **Blocks from other clients.** 72 mainnet blocks from Firedancer leaders
    and 38 testnet blocks from leaders not running Agave verified. Firedancer
-   itself was never run as an oracle.
+   itself was never run as an oracle. Firedancer's mainnet release v26.11.1
+   (November 2026) runs Alpenglow as its only consensus mode, so an independent
+   client now implements the whole pipeline on mainnet: a second differential
+   oracle, and cross-checking Alpenglow blocks a Firedancer leader produced,
+   are now possible where they were not.
 4. **What vouches for a set hash.** The exact set can be read three ways
    that agree, and none is a proof. A certificate does not vouch for stake.
 5. **The 2^80 leader collision attack** is my own analysis of the 20-byte
