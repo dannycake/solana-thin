@@ -16,8 +16,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "solana_thin_ffiFFI",
-            url: "https://github.com/dannycake/solana-thin/releases/download/v0.1.0/solana_thin_ffiFFI.xcframework.zip",
-            checksum: "128305df3bfcbfdf3ab3be723c11458cb40982819d03a9be1c0238bffe9e0b6a"
+            url: "https://github.com/dannycake/solana-thin/releases/download/v0.2.0/solana_thin_ffiFFI.xcframework.zip",
+            checksum: "1c62494b3da98a857aeb126b45b8f7bc7f49073de3571e73690a0093dcdff559"
         ),
         .target(
             name: "SolanaThin",
